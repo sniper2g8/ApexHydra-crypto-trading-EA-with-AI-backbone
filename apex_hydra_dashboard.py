@@ -28,32 +28,34 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .stApp { background-color: #0d1117; color: #e6edf3; }
+    .stApp { background-color: #f8fafc; color: #1e293b; }
     .metric-card {
-        background: #161b22; border: 1px solid #30363d;
-        border-radius: 8px; padding: 16px; margin: 4px 0;
+        background: #ffffff; border: 1px solid #e2e8f0;
+        border-radius: 10px; padding: 16px; margin: 4px 0;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
     }
-    .metric-val-pos { color: #2dba4e; font-size: 1.4rem; font-weight: 700; }
-    .metric-val-neg { color: #f85149; font-size: 1.4rem; font-weight: 700; }
-    .metric-val-neu { color: #58a6ff; font-size: 1.4rem; font-weight: 700; }
+    .metric-val-pos { color: #16a34a; font-size: 1.4rem; font-weight: 700; }
+    .metric-val-neg { color: #dc2626; font-size: 1.4rem; font-weight: 700; }
+    .metric-val-neu { color: #2563eb; font-size: 1.4rem; font-weight: 700; }
     .regime-badge {
         display:inline-block; padding:3px 10px; border-radius:12px;
         font-size:0.75rem; font-weight:600; margin:2px;
     }
-    .status-active { background:#1a3a1a; color:#2dba4e; border:1px solid #2dba4e; }
-    .status-paused { background:#3a3a1a; color:#e3b341; border:1px solid #e3b341; }
-    .status-halted { background:#3a1a1a; color:#f85149; border:1px solid #f85149; }
+    .status-active { background:#dcfce7; color:#16a34a; border:1px solid #16a34a; }
+    .status-paused { background:#fef9c3; color:#ca8a04; border:1px solid #ca8a04; }
+    .status-halted { background:#fee2e2; color:#dc2626; border:1px solid #dc2626; }
     .capital-box {
-        background: #1c2128; border: 1px solid #388bfd;
+        background: #eff6ff; border: 1px solid #93c5fd;
         border-radius: 8px; padding: 12px; margin: 8px 0;
-        font-size: 0.85rem; color: #8b949e;
+        font-size: 0.85rem; color: #475569;
     }
     .telegram-box {
-        background: #1c2128; border: 1px solid #29b2d1;
+        background: #f0f9ff; border: 1px solid #7dd3fc;
         border-radius: 8px; padding: 12px; margin: 8px 0;
-        font-size: 0.85rem; color: #8b949e;
+        font-size: 0.85rem; color: #475569;
     }
-    div[data-testid="stSidebarContent"] { background: #161b22; }
+    div[data-testid="stSidebarContent"] { background: #ffffff; border-right: 1px solid #e2e8f0; }
+    .stTabs [data-baseweb="tab-list"] { background: #f1f5f9; border-radius: 8px; padding: 2px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -349,7 +351,7 @@ kpi_cols = st.columns(6)
 def kpi(col, label, value, color_class="metric-val-neu"):
     col.markdown(
         f'<div class="metric-card">'
-        f'<div style="font-size:0.7rem;color:#8b949e;">{label}</div>'
+        f'<div style="font-size:0.7rem;color:#64748b;">{label}</div>'
         f'<div class="{color_class}">{value}</div>'
         f'</div>',
         unsafe_allow_html=True
@@ -415,10 +417,10 @@ with tab1:
         if "balance" in perf_df.columns:
             fig.add_trace(go.Scatter(
                 x=perf_df["timestamp"], y=perf_df["balance"],
-                name="Balance", line=dict(color="#2dba4e", width=1.5, dash="dot"),
+                name="Balance", line=dict(color="#16a34a", width=1.5, dash="dot"),
             ))
         fig.update_layout(
-            template="plotly_dark", paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+            template="plotly_white", paper_bgcolor="#f8fafc", plot_bgcolor="#ffffff",
             title="Equity & Balance", height=350, margin=dict(l=0,r=0,t=40,b=0),
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -427,10 +429,10 @@ with tab1:
             fig2 = go.Figure(go.Scatter(
                 x=perf_df["timestamp"], y=perf_df["drawdown"] * 100,
                 fill="tozeroy", fillcolor="rgba(248,81,73,0.2)",
-                line=dict(color="#f85149", width=1.5), name="DD%",
+                line=dict(color="#dc2626", width=1.5), name="DD%",
             ))
             fig2.update_layout(
-                template="plotly_dark", paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+                template="plotly_white", paper_bgcolor="#f8fafc", plot_bgcolor="#ffffff",
                 title="Drawdown %", height=200, margin=dict(l=0,r=0,t=40,b=0),
             )
             st.plotly_chart(fig2, use_container_width=True)
@@ -441,7 +443,7 @@ with tab1:
 with tab2:
     c1, c2 = st.columns(2)
     REGIME_COLORS = {
-        "Trend Bull": "#2dba4e", "Trend Bear": "#f85149",
+        "Trend Bull": "#16a34a", "Trend Bear": "#dc2626",
         "Ranging": "#e3b341", "High Volatility": "#ff7c43",
         "Breakout": "#a371f7", "Undefined": "#8b949e",
     }
@@ -457,10 +459,10 @@ with tab2:
                 ts   = pd.to_datetime(row["timestamp"]).strftime("%H:%M") if row.get("timestamp") else "—"
                 st.markdown(
                     f'<div style="display:flex;align-items:center;gap:10px;padding:8px;'
-                    f'background:#161b22;border-radius:6px;margin:3px 0;border-left:3px solid {col};">'
-                    f'<b style="color:#e6edf3;width:80px;">{row["symbol"]}</b>'
+                    f'background:#f8fafc;border-radius:6px;margin:3px 0;border-left:3px solid {col};">'
+                    f'<b style="color:#1e293b;width:80px;">{row["symbol"]}</b>'
                     f'<span style="color:{col};font-weight:600;width:120px;">{r}</span>'
-                    f'<span style="color:#8b949e;font-size:0.78rem;">'
+                    f'<span style="color:#64748b;font-size:0.78rem;">'
                     f'Conf:{conf:.0f}% ADX:{row.get("adx","—")} RSI:{row.get("rsi","—")} {ts}</span>'
                     f'</div>',
                     unsafe_allow_html=True
@@ -475,16 +477,16 @@ with tab2:
             fig = px.bar(rs, x="regime", y="win_rate_pct", color="win_rate_pct",
                          color_continuous_scale="RdYlGn", text="win_rate_pct",
                          title="Win Rate % by Regime")
-            fig.update_layout(template="plotly_dark", paper_bgcolor="#0d1117",
-                              plot_bgcolor="#161b22", height=280,
+            fig.update_layout(template="plotly_white", paper_bgcolor="#f8fafc",
+                              plot_bgcolor="#ffffff", height=280,
                               margin=dict(l=0,r=0,t=40,b=0), coloraxis_showscale=False)
             st.plotly_chart(fig, use_container_width=True)
 
             fig2 = px.bar(rs, x="regime", y="total_pnl", color="total_pnl",
                           color_continuous_scale="RdYlGn", text="total_pnl",
                           title="PnL by Regime")
-            fig2.update_layout(template="plotly_dark", paper_bgcolor="#0d1117",
-                               plot_bgcolor="#161b22", height=250,
+            fig2.update_layout(template="plotly_white", paper_bgcolor="#f8fafc",
+                               plot_bgcolor="#ffffff", height=250,
                                margin=dict(l=0,r=0,t=40,b=0), coloraxis_showscale=False)
             st.plotly_chart(fig2, use_container_width=True)
 
@@ -511,9 +513,9 @@ with tab3:
                 line=dict(color="#a371f7", width=2),
                 fill="tozeroy", fillcolor="rgba(163,113,247,0.1)",
             ))
-            fig.add_hline(y=50, line_dash="dot", line_color="#8b949e")
-            fig.update_layout(template="plotly_dark", paper_bgcolor="#0d1117",
-                              plot_bgcolor="#161b22", title="Global Win Rate %",
+            fig.add_hline(y=50, line_dash="dot", line_color="#94a3b8")
+            fig.update_layout(template="plotly_white", paper_bgcolor="#f8fafc",
+                              plot_bgcolor="#ffffff", title="Global Win Rate %",
                               height=300, margin=dict(l=0,r=0,t=40,b=0))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -526,7 +528,7 @@ with tab4:
         avail = [c for c in cols if c in trades_df.columns]
 
         def color_pnl(val):
-            if pd.isna(val) or val == 0: return "color:#8b949e"
+            if pd.isna(val) or val == 0: return "color:#64748b"
             return "color:#2dba4e" if val > 0 else "color:#f85149"
 
         styled = trades_df[avail].style
@@ -539,9 +541,9 @@ with tab4:
             close_t["pnl"] = pd.to_numeric(close_t["pnl"], errors="coerce")
             fig = px.histogram(close_t, x="pnl", nbins=30, color_discrete_sequence=["#58a6ff"],
                                title="PnL Distribution")
-            fig.add_vline(x=0, line_dash="dash", line_color="#f85149")
-            fig.update_layout(template="plotly_dark", paper_bgcolor="#0d1117",
-                              plot_bgcolor="#161b22", height=250, margin=dict(l=0,r=0,t=40,b=0))
+            fig.add_vline(x=0, line_dash="dash", line_color="#dc2626")
+            fig.update_layout(template="plotly_white", paper_bgcolor="#f8fafc",
+                              plot_bgcolor="#ffffff", height=250, margin=dict(l=0,r=0,t=40,b=0))
             st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No trades yet.")
@@ -558,10 +560,10 @@ with tab5:
                 t    = row.get("type","INFO")
                 icon = ICONS.get(t,"•")
                 ts   = pd.to_datetime(row["timestamp"]).strftime("%H:%M:%S") if row.get("timestamp") else "—"
-                col  = "#f85149" if t in ("HALT","ERROR") else ("#2dba4e" if t in ("RESUME","OPEN") else "#8b949e")
+                col  = "#dc2626" if t in ("HALT","ERROR") else ("#16a34a" if t in ("RESUME","OPEN") else "#8b949e")
                 st.markdown(
                     f'<div style="font-size:0.8rem;padding:4px 8px;border-left:3px solid {col};margin:2px 0;">'
-                    f'<span style="color:#8b949e;">{ts}</span> {icon} '
+                    f'<span style="color:#64748b;">{ts}</span> {icon} '
                     f'<span style="color:{col};">[{t}]</span> {row.get("message","")}</div>',
                     unsafe_allow_html=True
                 )
@@ -746,9 +748,9 @@ with tab7:
         def bt_kpi(col, label, val, good=None):
             color = "#58a6ff"
             if good is not None:
-                color = "#2dba4e" if good else "#f85149"
+                color = "#16a34a" if good else "#dc2626"
             col.markdown(
-                f'<div class="metric-card"><div style="font-size:0.65rem;color:#8b949e;">{label}</div>'
+                f'<div class="metric-card"><div style="font-size:0.65rem;color:#64748b;">{label}</div>'
                 f'<div style="color:{color};font-size:1.2rem;font-weight:700;">{val}</div></div>',
                 unsafe_allow_html=True
             )
@@ -770,10 +772,10 @@ with tab7:
                 name="Balance",
             ))
             fig_eq.add_hline(y=res.get("initial_balance", res["equity_curve"][0]),
-                             line_dash="dot", line_color="#8b949e",
+                             line_dash="dot", line_color="#94a3b8",
                              annotation_text="Starting balance")
             fig_eq.update_layout(
-                template="plotly_dark", paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+                template="plotly_white", paper_bgcolor="#f8fafc", plot_bgcolor="#ffffff",
                 title="Equity Curve (Backtest)", height=320, margin=dict(l=0,r=0,t=40,b=0),
             )
             st.plotly_chart(fig_eq, use_container_width=True)
@@ -788,8 +790,8 @@ with tab7:
                 fig_r = px.bar(rd, x="Regime", y="Win Rate %", color="Win Rate %",
                                color_continuous_scale="RdYlGn", text="Win Rate %",
                                title="Win Rate by Regime (Backtest)")
-                fig_r.update_layout(template="plotly_dark", paper_bgcolor="#0d1117",
-                                    plot_bgcolor="#161b22", height=280,
+                fig_r.update_layout(template="plotly_white", paper_bgcolor="#f8fafc",
+                                    plot_bgcolor="#ffffff", height=280,
                                     margin=dict(l=0,r=0,t=40,b=0), coloraxis_showscale=False)
                 st.plotly_chart(fig_r, use_container_width=True)
 
@@ -800,9 +802,9 @@ with tab7:
                 fig_h = px.histogram(trades_bt, x="pnl", nbins=25,
                                      color_discrete_sequence=["#a371f7"],
                                      title="PnL Distribution (Backtest)")
-                fig_h.add_vline(x=0, line_dash="dash", line_color="#f85149")
-                fig_h.update_layout(template="plotly_dark", paper_bgcolor="#0d1117",
-                                    plot_bgcolor="#161b22", height=280,
+                fig_h.add_vline(x=0, line_dash="dash", line_color="#dc2626")
+                fig_h.update_layout(template="plotly_white", paper_bgcolor="#f8fafc",
+                                    plot_bgcolor="#ffffff", height=280,
                                     margin=dict(l=0,r=0,t=40,b=0))
                 st.plotly_chart(fig_h, use_container_width=True)
 
