@@ -12,32 +12,32 @@ st.set_page_config(page_title="ApexHydra v4.0", page_icon="⚡", layout="wide",
                    initial_sidebar_state="expanded")
 
 st.markdown("""<style>
-html,body,.stApp{background:#0d1117;color:#e6edf3}
-section[data-testid="stSidebar"]{background:#161b22 !important;border-right:1px solid #30363d}
+html,body,.stApp{background:#ffffff;color:#1a1a2e}
+section[data-testid="stSidebar"]{background:#f8f9fc !important;border-right:1px solid #e2e8f0}
 .block-container{padding-top:1.2rem;padding-bottom:2rem}
-.kpi-card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:18px 16px 14px;margin:4px 0;box-shadow:0 2px 8px rgba(0,0,0,.25)}
-.kpi-label{font-size:.68rem;color:#8b949e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
-.kpi-val{font-size:1.45rem;font-weight:700;line-height:1.1}
-.kpi-sub{font-size:.72rem;color:#8b949e;margin-top:4px}
-.kpi-pos{color:#3fb950}.kpi-neg{color:#f85149}.kpi-neu{color:#58a6ff}.kpi-gold{color:#e3b341}
+.kpi-card{background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:18px 16px 14px;margin:4px 0;box-shadow:0 1px 6px rgba(0,0,0,.07)}
+.kpi-label{font-size:.68rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.kpi-val{font-size:1.45rem;font-weight:700;line-height:1.1;color:#1a1a2e}
+.kpi-sub{font-size:.72rem;color:#64748b;margin-top:4px}
+.kpi-pos{color:#16a34a}.kpi-neg{color:#dc2626}.kpi-neu{color:#2563eb}.kpi-gold{color:#d97706}
 .badge{display:inline-block;padding:3px 12px;border-radius:20px;font-size:.72rem;font-weight:700;letter-spacing:.04em}
-.badge-active{background:#1a3a2a;color:#3fb950;border:1px solid #3fb950}
-.badge-paused{background:#3a3000;color:#e3b341;border:1px solid #e3b341}
-.badge-halted{background:#3a0a0a;color:#f85149;border:1px solid #f85149}
-.badge-offline{background:#1c1c1c;color:#8b949e;border:1px solid #30363d}
-.ibox{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px 16px;margin:6px 0;font-size:.84rem;color:#c9d1d9}
-.ibox-blue{border-left:3px solid #58a6ff;background:#0d1f33}
-.ibox-green{border-left:3px solid #3fb950;background:#0d2118}
-.ibox-red{border-left:3px solid #f85149;background:#2d0a0a}
-.ibox-yellow{border-left:3px solid #e3b341;background:#2a2000}
-.ev-row{font-size:.8rem;padding:5px 10px;border-radius:6px;margin:2px 0;background:#161b22;border-left:3px solid #30363d;display:flex;gap:10px;align-items:baseline}
-.ev-ts{color:#8b949e;min-width:58px;font-size:.73rem}
+.badge-active{background:#dcfce7;color:#16a34a;border:1px solid #16a34a}
+.badge-paused{background:#fef9c3;color:#d97706;border:1px solid #d97706}
+.badge-halted{background:#fee2e2;color:#dc2626;border:1px solid #dc2626}
+.badge-offline{background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1}
+.ibox{background:#f8f9fc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;margin:6px 0;font-size:.84rem;color:#374151}
+.ibox-blue{border-left:3px solid #2563eb;background:#eff6ff}
+.ibox-green{border-left:3px solid #16a34a;background:#f0fdf4}
+.ibox-red{border-left:3px solid #dc2626;background:#fef2f2}
+.ibox-yellow{border-left:3px solid #d97706;background:#fffbeb}
+.ev-row{font-size:.8rem;padding:5px 10px;border-radius:6px;margin:2px 0;background:#f8f9fc;border-left:3px solid #e2e8f0;display:flex;gap:10px;align-items:baseline}
+.ev-ts{color:#64748b;min-width:58px;font-size:.73rem}
 .ev-type{font-weight:700;min-width:62px;font-size:.73rem}
-.rrow{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#161b22;border-radius:8px;margin:3px 0;border:1px solid #30363d}
-.stTabs [data-baseweb="tab-list"]{background:#161b22;border-radius:8px;border:1px solid #30363d;gap:2px;padding:3px}
-.stTabs [data-baseweb="tab"]{color:#8b949e;font-size:.82rem;border-radius:6px !important;padding:6px 14px}
-.stTabs [aria-selected="true"]{background:#21262d !important;color:#e6edf3 !important}
-hr{border-color:#30363d}
+.rrow{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#f8f9fc;border-radius:8px;margin:3px 0;border:1px solid #e2e8f0}
+.stTabs [data-baseweb="tab-list"]{background:#f1f5f9;border-radius:8px;border:1px solid #e2e8f0;gap:2px;padding:3px}
+.stTabs [data-baseweb="tab"]{color:#64748b;font-size:.82rem;border-radius:6px !important;padding:6px 14px}
+.stTabs [aria-selected="true"]{background:#ffffff !important;color:#1a1a2e !important;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+hr{border-color:#e2e8f0}
 </style>""", unsafe_allow_html=True)
 
 # ── Supabase ───────────────────────────────────────────────────────────
@@ -175,9 +175,10 @@ def update_cfg(upd):
         st.error(f"Update failed: {e}"); return False
 
 # ── Helpers ────────────────────────────────────────────────────────────
-RC = {"Trend Bull":"#3fb950","Trend Bear":"#f85149","Ranging":"#e3b341",
-      "High Volatility":"#ff7c43","Breakout":"#a371f7","Undefined":"#8b949e",
-      "TRENDING":"#3fb950","RANGING":"#e3b341","VOLATILE":"#ff7c43"}
+RC = {"Trend Bull":"#16a34a","Trend Bear":"#dc2626","Ranging":"#d97706",
+      "High Volatility":"#ea580c","Breakout":"#7c3aed","Undefined":"#64748b",
+      "TRENDING":"#16a34a","RANGING":"#d97706","VOLATILE":"#ea580c"}
+
 
 def kpi(col, label, value, sub="", color="kpi-neu"):
     col.markdown(f'<div class="kpi-card"><div class="kpi-label">{label}</div>'
@@ -186,9 +187,9 @@ def kpi(col, label, value, sub="", color="kpi-neu"):
                  + '</div>', unsafe_allow_html=True)
 
 def dark(fig, title="", h=340):
-    fig.update_layout(template="plotly_dark",paper_bgcolor="#0d1117",plot_bgcolor="#161b22",
+    fig.update_layout(template="plotly_white",paper_bgcolor="#ffffff",plot_bgcolor="#f8f9fc",
                       title=title,height=h,margin=dict(l=0,r=0,t=40,b=0),
-                      font=dict(color="#c9d1d9"),legend=dict(bgcolor="#161b22",bordercolor="#30363d"))
+                      font=dict(color="#374151"),legend=dict(bgcolor="#ffffff",bordercolor="#e2e8f0"))
     return fig
 
 def ibox(text, kind=""):
@@ -196,24 +197,24 @@ def ibox(text, kind=""):
     st.markdown(f'<div class="ibox{extra}">{text}</div>', unsafe_allow_html=True)
 
 ICONS = {"HALT":"⛔","RESUME":"▶️","OPEN":"📈","CLOSE":"📉","ERROR":"❌","INFO":"ℹ️","DEINIT":"🔌"}
-TCOL  = {"HALT":"#f85149","ERROR":"#f85149","RESUME":"#3fb950","OPEN":"#3fb950",
-         "CLOSE":"#58a6ff","DEINIT":"#ff7c43","INFO":"#8b949e","WARN":"#e3b341"}
+TCOL  = {"HALT":"#dc2626","ERROR":"#dc2626","RESUME":"#16a34a","OPEN":"#16a34a",
+         "CLOSE":"#2563eb","DEINIT":"#ea580c","INFO":"#64748b","WARN":"#d97706"}
 
 def ev_row(ts_str, type_str, msg_str, color="#8b949e"):
     st.markdown(
         f'<div class="ev-row" style="border-left-color:{color};">'
         f'<span class="ev-ts">{ts_str}</span>'
         f'<span class="ev-type" style="color:{color};">{ICONS.get(type_str,"•")} {type_str}</span>'
-        f'<span style="color:#c9d1d9;font-size:.78rem;">{str(msg_str)[:130]}</span></div>',
+        f'<span style="color:#374151;font-size:.78rem;">{str(msg_str)[:130]}</span></div>',
         unsafe_allow_html=True)
 
 # ── Sidebar ────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚡ ApexHydra v4.0")
     if DB_OK:
-        st.markdown('<div style="background:#0d2118;border:1px solid #3fb950;border-radius:8px;padding:8px 14px;font-size:.82rem;color:#3fb950;">🟢 Supabase connected</div>', unsafe_allow_html=True)
+        st.markdown('<div style="background:#f0fdf4;border:1px solid #16a34a;border-radius:8px;padding:8px 14px;font-size:.82rem;color:#16a34a;">🟢 Supabase connected</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div style="background:#2d0a0a;border:1px solid #f85149;border-radius:8px;padding:8px 14px;font-size:.82rem;color:#f85149;">🔴 {DB_ERR[:80]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="background:#fef2f2;border:1px solid #dc2626;border-radius:8px;padding:8px 14px;font-size:.82rem;color:#dc2626;">🔴 {DB_ERR[:80]}</div>', unsafe_allow_html=True)
         st.info("Check SUPABASE_URL + SUPABASE_KEY in .streamlit/secrets.toml")
         st.stop()
 
@@ -310,7 +311,7 @@ cfg_data  = cfg()
 H1,H2 = st.columns([4,1])
 with H1:
     st.markdown("# ⚡ ApexHydra Crypto v4.0")
-    st.markdown(f"<span style='color:#8b949e;font-size:.85rem;'>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</span>", unsafe_allow_html=True)
+    st.markdown(f"<span style='color:#64748b;font-size:.85rem;'>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</span>", unsafe_allow_html=True)
 with H2:
     if cfg_data:
         bc = "badge-halted" if cfg_data.get("halted") else ("badge-paused" if cfg_data.get("paused") else "badge-active")
@@ -345,7 +346,7 @@ elif cfg_data and cfg_data.get("live_balance"):
 else:
     for col in kpis:
         col.markdown('<div class="kpi-card"><div class="kpi-label">—</div>'
-                     '<div class="kpi-val" style="color:#8b949e;font-size:2rem;">—</div></div>',
+                     '<div class="kpi-val" style="color:#94a3b8;font-size:2rem;">—</div></div>',
                      unsafe_allow_html=True)
     reason = ("No ea_config row — set <code>Inp_DB_Enable=true</code> in EA inputs" if cfg_data is None
               else "EA hasn't sent live data yet — wait 15–30s after EA starts (check AutoTrading is ON)"
@@ -372,14 +373,14 @@ with T[0]:
         ps = perf_df.sort_values("timestamp")
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=ps["timestamp"],y=ps["equity"],name="Equity",
-                                  line=dict(color="#58a6ff",width=2),fill="tozeroy",fillcolor="rgba(88,166,255,.06)"))
+                                  line=dict(color="#2563eb",width=2),fill="tozeroy",fillcolor="rgba(37,99,235,.06)"))
         if "balance" in ps.columns:
             fig.add_trace(go.Scatter(x=ps["timestamp"],y=ps["balance"],name="Balance",
-                                      line=dict(color="#3fb950",width=1.5,dash="dot")))
+                                      line=dict(color="#16a34a",width=1.5,dash="dot")))
         st.plotly_chart(dark(fig,"Equity & Balance",360), use_container_width=True)
         if "drawdown" in ps.columns:
             fig2 = go.Figure(go.Scatter(x=ps["timestamp"],y=ps["drawdown"]*100,
-                                         fill="tozeroy",fillcolor="rgba(248,81,73,.15)",line=dict(color="#f85149",width=1.5)))
+                                         fill="tozeroy",fillcolor="rgba(220,38,38,.12)",line=dict(color="#dc2626",width=1.5)))
             st.plotly_chart(dark(fig2,"Drawdown %",200), use_container_width=True)
         s1,s2,s3,s4 = st.columns(4)
         sb=float(ps.iloc[0]["balance"] or 0); eb=float(ps.iloc[-1]["balance"] or 0)
@@ -399,9 +400,9 @@ with T[1]:
                 r=str(row.get("regime","Undefined")); col=RC.get(r,"#8b949e")
                 ts=row["timestamp"].strftime("%H:%M") if pd.notna(row.get("timestamp")) else "—"
                 st.markdown(f'<div class="rrow" style="border-left:3px solid {col};">'
-                            f'<b style="color:#e6edf3;min-width:80px;">{row.get("symbol","?")}</b>'
+                            f'<b style="color:#1a1a2e;min-width:80px;">{row.get("symbol","?")}</b>'
                             f'<span style="color:{col};font-weight:600;min-width:130px;">{r}</span>'
-                            f'<span style="color:#8b949e;font-size:.76rem;">Conf:{float(row.get("confidence",0) or 0)*100:.0f}% '
+                            f'<span style="color:#64748b;font-size:.76rem;">Conf:{float(row.get("confidence",0) or 0)*100:.0f}% '
                             f'ADX:{row.get("adx","—")} RSI:{row.get("rsi","—")} {ts}</span></div>',
                             unsafe_allow_html=True)
         else: ibox("No live regime data — waiting for EA scans.")
@@ -437,7 +438,7 @@ with T[2]:
         st.subheader("Win Rate Trend")
         if not perf_df.empty and "global_accuracy" in perf_df.columns:
             fig=go.Figure(go.Scatter(x=perf_df["timestamp"],y=perf_df["global_accuracy"]*100,
-                                      line=dict(color="#a371f7",width=2),fill="tozeroy",fillcolor="rgba(163,113,247,.08)"))
+                                      line=dict(color="#7c3aed",width=2),fill="tozeroy",fillcolor="rgba(124,58,237,.08)"))
             fig.add_hline(y=50,line_dash="dot",line_color="#8b949e")
             st.plotly_chart(dark(fig,"Global Win Rate %",260),use_container_width=True)
         else: ibox("Win rate trend appears once trades are closed.")
@@ -465,7 +466,7 @@ with T[3]:
             s1,s2,s3,s4,s5=st.columns(5)
             s1.metric("Closed",len(closed)); s2.metric("Total PnL",f"${cp.sum():+,.2f}")
             s3.metric("Best",f"${cp.max():+,.2f}"); s4.metric("Worst",f"${cp.min():+,.2f}"); s5.metric("Avg",f"${cp.mean():+,.2f}")
-            fig=px.histogram(cp,nbins=30,color_discrete_sequence=["#58a6ff"],title="PnL Distribution")
+            fig=px.histogram(cp,nbins=30,color_discrete_sequence=["#2563eb"],title="PnL Distribution")
             fig.add_vline(x=0,line_dash="dash",line_color="#f85149")
             st.plotly_chart(dark(fig,"",240),use_container_width=True)
     else: ibox("📋 No trades yet — they appear here once the EA opens its first position.","yellow")
@@ -495,7 +496,7 @@ with T[4]:
 # ── T5 EA Logs ─────────────────────────────────────────────────────────
 with T[5]:
     st.subheader("🖥️ EA Log Stream")
-    LC={"ERROR":"#f85149","WARN":"#e3b341","INFO":"#58a6ff","DEBUG":"#8b949e"}
+    LC={"ERROR":"#dc2626","WARN":"#d97706","INFO":"#2563eb","DEBUG":"#64748b"}
     eals=ea_logs(100)
     if not eals.empty:
         for _,row in eals.iterrows():
@@ -504,11 +505,11 @@ with T[5]:
             sym=str(row.get("symbol",""))
             col=LC.get(lvl,"#8b949e")
             msg=str(row.get("message",""))[:160]
-            sym_s=f'<span style="color:#e3b341;min-width:65px;">{sym}</span>' if sym else ""
+            sym_s=f'<span style="color:#d97706;min-width:65px;">{sym}</span>' if sym else ""
             st.markdown(f'<div class="ev-row" style="border-left-color:{col};">'
                         f'<span class="ev-ts">{ts}</span>'
                         f'<span class="ev-type" style="color:{col};">[{lvl}]</span>'
-                        f'{sym_s}<span style="color:#c9d1d9;font-size:.78rem;">{msg}</span></div>',
+                        f'{sym_s}<span style="color:#374151;font-size:.78rem;">{msg}</span></div>',
                         unsafe_allow_html=True)
     else:
         ibox("ℹ️ EA logs stream here once running. EA writes via Modal <code>/log</code> endpoint.<br>"
@@ -588,14 +589,14 @@ with T[7]:
         res=st.session_state["bt"]; st.markdown("---"); st.markdown("### Results")
         m1,m2,m3,m4,m5,m6,m7=st.columns(7)
         def bk(c,l,v,g=None):
-            col="#3fb950" if g is True else("#f85149" if g is False else "#58a6ff")
+            col="#16a34a" if g is True else("#dc2626" if g is False else "#2563eb")
             c.markdown(f'<div class="kpi-card"><div class="kpi-label">{l}</div><div class="kpi-val" style="color:{col};font-size:1.1rem;">{v}</div></div>',unsafe_allow_html=True)
         bk(m1,"Trades",res["total_trades"]); bk(m2,"Win Rate",f"{res['win_rate']*100:.1f}%",res['win_rate']>=.5)
         bk(m3,"PnL",f"${res['total_pnl']:+,.2f}",res['total_pnl']>=0); bk(m4,"Max DD",f"{res['max_drawdown_pct']:.1f}%",res['max_drawdown_pct']<=15)
         bk(m5,"Sharpe",f"{res['sharpe_ratio']:.2f}",res['sharpe_ratio']>=1.); bk(m6,"PF",f"{res['profit_factor']:.2f}",res['profit_factor']>=1.5)
         bk(m7,"Avg R:R",f"{res.get('avg_rr',0):.2f}",res.get('avg_rr',0)>=1.5)
         if res.get("equity_curve"):
-            fig=go.Figure(go.Scatter(y=res["equity_curve"],mode="lines",line=dict(color="#58a6ff",width=2),fill="tozeroy",fillcolor="rgba(88,166,255,.06)"))
+            fig=go.Figure(go.Scatter(y=res["equity_curve"],mode="lines",line=dict(color="#2563eb",width=2),fill="tozeroy",fillcolor="rgba(37,99,235,.06)"))
             fig.add_hline(y=res["equity_curve"][0],line_dash="dot",line_color="#8b949e")
             st.plotly_chart(dark(fig,"Backtest Equity",300),use_container_width=True)
         if res.get("trades"):
