@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                     ApexHydra_Crypto_v4.mq5      |
 //|         AI-Powered Crypto EA — Modal AI + Supabase + Streamlit   |
-//|                        Production Grade v4.0                      |
+//|                        Production Grade v4.1 — News Filter                      |
 //+------------------------------------------------------------------+
 #property copyright   "ApexHydra Trading Systems"
-#property version     "4.00"
+#property version     "4.10"
 #property description "Multi-symbol crypto EA with Modal AI backbone"
 #property strict
 
@@ -26,6 +26,11 @@ input string        Inp_Modal_URL     = "https://YOUR_MODAL_WORKSPACE--apexhydra
 input int           Inp_AI_Timeout    = 15000;      // HTTP timeout ms
 input int           Inp_AI_Lookback   = 100;        // Bars to send to AI
 input bool          Inp_AI_Fallback   = true;       // Use local signal if AI fails
+
+input group "━━━━━ NEWS FILTER ━━━━━"
+input bool          Inp_News_Filter   = true;       // Block trades around high-impact news
+input int           Inp_News_Buffer_Min = 15;       // Minutes to block before/after event
+input bool          Inp_News_Log      = true;       // Log news blocks to Expert tab
 
 input group "━━━━━ INDICATORS ━━━━━"
 input int           Inp_EMA_Fast      = 20;
@@ -58,7 +63,7 @@ input group "━━━━━ SUPABASE ━━━━━"
 input bool          Inp_DB_Enable     = true;
 input string        Inp_DB_URL        = "https://YOUR_PROJECT_ID.supabase.co";
 input string        Inp_DB_Key        = "YOUR_ANON_KEY";
-input int           Inp_DB_SyncSec    = 30;         // Performance sync interval
+input int           Inp_DB_SyncSec    = 15;         // Performance sync interval (seconds)
 input int           Inp_Config_Sec    = 30;         // Config pull interval
 
 input group "━━━━━ DASHBOARD (MT5 Overlay) ━━━━━"
@@ -181,6 +186,14 @@ int OnInit() {
    // Pull config immediately
    PullConfig();
    ScanAll();
+
+   // Write first performance snapshot immediately so dashboard/Telegram
+   // show live balance & equity from the moment the EA starts
+   if(Inp_DB_Enable) {
+      DBSyncPerformance(false);
+      g_last_db_sync = TimeCurrent();
+      DBPost("events", BuildEventJSON("INFO", "EA started — initial performance snapshot written"));
+   }
    return INIT_SUCCEEDED;
 }
 
@@ -196,6 +209,11 @@ void OnDeinit(const int reason) {
 //═══════════════════════════════════════════════════════════════════
 
 void OnTick() {
+   // Always track peak equity even when halted/paused
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(eq > g_peak_equity) g_peak_equity = eq;
+   g_dd_pct = (g_peak_equity > 0) ? (1.0 - eq / g_peak_equity) * 100.0 : 0;
+
    if(g_cfg.halted || g_cfg.paused) return;
    ManagePositions();
 }
@@ -312,12 +330,93 @@ bool CollectIndicators(SSymbolData &s) {
    return true;
 }
 
+
+//═══════════════════════════════════════════════════════════════════
+//  NEWS FILTER  (v4.1)
+//  Uses MT5's built-in economic calendar to detect high-impact events.
+//  Returns minutes to the nearest high-impact event for this symbol's
+//  currency pair. Returns 999 if no event found within look-ahead window.
+//═══════════════════════════════════════════════════════════════════
+
+//  Map a symbol like "BTCUSD" → {"USD"} or "EURUSD" → {"EUR","USD"}
+void GetSymbolCurrencies(const string sym, string &currencies[]) {
+   // Crypto: only quote currency matters (USD)
+   string base = StringSubstr(sym, 0, 3);
+   string quote = StringSubstr(sym, 3, 3);
+   // Common crypto bases — treat as non-fiat, only flag quote events
+   string cryptoBases[] = {"BTC","ETH","SOL","BNB","XRP","ADA","DOT","AVA","LTC","DOGE"};
+   bool isCrypto = false;
+   for(int i = 0; i < ArraySize(cryptoBases); i++)
+      if(base == cryptoBases[i]) { isCrypto = true; break; }
+
+   if(isCrypto) {
+      ArrayResize(currencies, 1);
+      currencies[0] = quote;
+   } else {
+      ArrayResize(currencies, 2);
+      currencies[0] = base;
+      currencies[1] = quote;
+   }
+}
+
+int GetNewsMinutesAway(const string sym) {
+   if(!Inp_News_Filter) return 999;
+
+   string currencies[];
+   GetSymbolCurrencies(sym, currencies);
+   if(ArraySize(currencies) == 0) return 999;
+
+   datetime now    = TimeCurrent();
+   datetime look_ahead = now + (Inp_News_Buffer_Min + 5) * 60;  // Look slightly past buffer
+   datetime look_back  = now - Inp_News_Buffer_Min * 60;        // Catch events just fired
+
+   MqlCalendarValue events[];
+   int cnt = CalendarValueHistory(events, look_back, look_ahead, NULL, NULL);
+   if(cnt <= 0) return 999;
+
+   int min_dist = 999;
+   for(int i = 0; i < cnt; i++) {
+      // Only HIGH impact events
+      MqlCalendarEvent ev_info;
+      if(!CalendarEventById(events[i].event_id, ev_info)) continue;
+      if(ev_info.importance != CALENDAR_IMPORTANCE_HIGH) continue;
+
+      // Check if this event's currency matches our symbol
+      MqlCalendarCountry country;
+      if(!CalendarCountryById(ev_info.country_id, country)) continue;
+      string ev_currency = country.currency;
+
+      bool match = false;
+      for(int c = 0; c < ArraySize(currencies); c++)
+         if(currencies[c] == ev_currency) { match = true; break; }
+      if(!match) continue;
+
+      // Calculate distance in minutes
+      int dist = (int)((events[i].time - now) / 60);
+      int abs_dist = (int)MathAbs((double)dist);
+      if(abs_dist < min_dist) min_dist = abs_dist;
+   }
+   return min_dist;
+}
+
+bool IsNewsBlocked(const string sym, int &mins_away_out) {
+   mins_away_out = GetNewsMinutesAway(sym);
+   bool blocked = (mins_away_out < Inp_News_Buffer_Min);
+   if(blocked && Inp_News_Log)
+      Log(sym + " NEWS BLOCK: high-impact event in " + IntegerToString(mins_away_out) + " min");
+   return blocked;
+}
+
 //═══════════════════════════════════════════════════════════════════
 //  MODAL AI CALL
 //═══════════════════════════════════════════════════════════════════
 
 void CallModalAI(SSymbolData &s) {
    string sym = s.symbol;
+
+   // Check news filter (compute once, passed into payload)
+   int news_mins = 999;
+   IsNewsBlocked(sym, news_mins);   // Sets news_mins; logging handled inside
 
    // Build OHLCV arrays for payload
    int n = MathMin(Inp_AI_Lookback, iBars(sym, Inp_TF) - 2);
@@ -358,7 +457,8 @@ void CallModalAI(SSymbolData &s) {
       "\"tick_value\":%.5f,\"tick_size\":%.5f,"
       "\"min_lot\":%.2f,\"max_lot\":%.2f,\"lot_step\":%.2f,"
       "\"point\":%.5f,\"digits\":%d,"
-      "\"recent_signals\":%s,\"recent_outcomes\":%s,\"recent_regimes\":%s"
+      "\"recent_signals\":%s,\"recent_outcomes\":%s,\"recent_regimes\":%s,"
+      "\"news_blackout\":%s,\"news_minutes_away\":%d,\"news_buffer_minutes\":%d"
       "}",
       sym, EnumToString(Inp_TF), Inp_Magic,
       TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
@@ -376,7 +476,10 @@ void CallModalAI(SSymbolData &s) {
       SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP),
       SymbolInfoDouble(sym, SYMBOL_POINT),
       (int)SymbolInfoInteger(sym, SYMBOL_DIGITS),
-      h_sigs, h_pnls, h_regs
+      h_sigs, h_pnls, h_regs,
+      (news_mins < Inp_News_Buffer_Min ? "true" : "false"),
+      news_mins,
+      Inp_News_Buffer_Min
    );
 
    // HTTP POST to Modal
@@ -422,6 +525,14 @@ void CallModalAI(SSymbolData &s) {
 void ExecuteTrade(SSymbolData &s) {
    if(g_cfg.halted || g_cfg.paused) return;
    if(s.signal == 0) return;
+
+   // News filter — check before executing
+   int news_mins = 999;
+   if(IsNewsBlocked(s.symbol, news_mins)) {
+      // Still send signal=0 payload to Modal so server stays in sync,
+      // but skip the actual order placement.
+      return;
+   }
    if(s.ai_lots <= 0 || s.ai_sl <= 0 || s.ai_tp <= 0) return;
    if(CountOpenPos() >= g_cfg.max_positions) return;
    if(s.ai_rr < Inp_Min_RR) {
@@ -550,9 +661,7 @@ void SyncPositions() {
 //═══════════════════════════════════════════════════════════════════
 
 void CheckRisk() {
-   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(eq > g_peak_equity) g_peak_equity = eq;
-   g_dd_pct = (g_peak_equity > 0) ? (1.0 - eq/g_peak_equity)*100 : 0;
+   // Peak equity + DD% already maintained in OnTick — read g_dd_pct directly
 
    if(!g_cfg.halted && g_dd_pct >= g_cfg.max_dd_pct) {
       g_cfg.halted = true;
@@ -651,20 +760,51 @@ void DBLogRegime(const SSymbolData &s) {
 }
 
 void DBSyncPerformance(bool final_snap) {
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
+   double acc = (g_total_trades > 0 ? (double)g_total_wins / g_total_trades : 0.5);
+   string ts  = TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS);
+
+   // ── INSERT a history row (time-series for equity curve chart) ─────
    string json = StringFormat(
       "{\"balance\":%.2f,\"equity\":%.2f,\"drawdown\":%.4f,"
       "\"total_trades\":%d,\"wins\":%d,\"losses\":%d,"
       "\"total_pnl\":%.2f,\"global_accuracy\":%.4f,"
       "\"halted\":%s,\"final\":%s,\"timestamp\":\"%s\"}",
-      AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
-      g_dd_pct, g_total_trades, g_total_wins, g_total_losses,
-      g_total_pnl,
-      (g_total_trades > 0 ? (double)g_total_wins/g_total_trades : 0.5),
-      (g_cfg.halted  ? "true":"false"),
-      (final_snap    ? "true":"false"),
-      TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS)
+      bal, eq, g_dd_pct / 100.0,
+      g_total_trades, g_total_wins, g_total_losses, g_total_pnl, acc,
+      (g_cfg.halted ? "true" : "false"),
+      (final_snap   ? "true" : "false"),
+      ts
    );
    DBPost("performance", json);
+
+   // ── PATCH ea_config with live balance snapshot so Telegram /status ─
+   //    always shows current figures even between full performance syncs.
+   //    This piggybacks on the existing ea_config row (magic key).
+   string patch = StringFormat(
+      "{\"live_balance\":%.2f,\"live_equity\":%.2f,"
+      "\"live_dd_pct\":%.2f,\"live_pnl\":%.2f,"
+      "\"live_trades\":%d,\"live_wins\":%d,\"live_losses\":%d,"
+      "\"live_ts\":\"%s\"}",
+      bal, eq, g_dd_pct, g_total_pnl,
+      g_total_trades, g_total_wins, g_total_losses, ts
+   );
+   // PATCH to ea_config so Streamlit + Telegram read it immediately
+   if(!Inp_DB_Enable) return;
+   string url     = Inp_DB_URL + "/rest/v1/ea_config?magic=eq." + IntegerToString(Inp_Magic);
+   string headers = "Content-Type: application/json
+"
+                  + "apikey: "         + Inp_DB_Key + "
+"
+                  + "Authorization: Bearer " + Inp_DB_Key + "
+"
+                  + "Prefer: return=minimal
+";
+   char req[], res[];
+   StringToCharArray(patch, req, 0, StringLen(patch));
+   string res_hdr;
+   WebRequest("PATCH", url, headers, 5000, req, res, res_hdr);
 }
 
 string BuildEventJSON(string type, string msg) {
@@ -783,7 +923,7 @@ void UpdateDashboard() {
    ObjectSetInteger(0,DASH+"BG",OBJPROP_BACK,false);
    ObjectSetInteger(0,DASH+"BG",OBJPROP_SELECTABLE,false);
 
-   Lbl(DASH+"T1","⚡ APEXHYDRA v4.0  [Modal AI + Supabase]",x,y,10,CYAN,true); y+=lh+2;
+   Lbl(DASH+"T1","⚡ APEXHYDRA v4.1  [Modal AI + Supabase + News Filter]",x,y,10,CYAN,true); y+=lh+2;
 
    double bal=AccountInfoDouble(ACCOUNT_BALANCE), eq=AccountInfoDouble(ACCOUNT_EQUITY);
    double wr=(g_total_trades>0?(double)g_total_wins/g_total_trades*100:0);

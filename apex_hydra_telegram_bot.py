@@ -127,8 +127,57 @@ def db_push_config(updates: dict) -> bool:
 
 
 def db_get_latest_performance() -> dict:
+    """
+    Returns the latest performance snapshot.
+    If the performance table has data, uses that.
+    Falls back to live_* fields patched into ea_config by the EA every 15s
+    so Telegram always shows current balance/equity even before the first
+    full performance row is written.
+    """
+    # Try performance table first (has full history)
     r = sb.table("performance").select("*").order("timestamp", desc=True).limit(1).execute()
-    return r.data[0] if r.data else {}
+    if r.data:
+        row = r.data[0]
+        # Merge live fields from ea_config if they're fresher
+        try:
+            cfg = sb.table("ea_config").select(
+                "live_balance,live_equity,live_dd_pct,live_pnl,"
+                "live_trades,live_wins,live_losses,live_ts"
+            ).limit(1).execute()
+            if cfg.data and cfg.data[0].get("live_balance"):
+                c = cfg.data[0]
+                # Use live values if ea_config was updated more recently
+                row["balance"]      = c.get("live_balance",  row.get("balance", 0))
+                row["equity"]       = c.get("live_equity",   row.get("equity", 0))
+                row["drawdown"]     = (c.get("live_dd_pct", 0) or 0) / 100.0
+                row["total_pnl"]    = c.get("live_pnl",      row.get("total_pnl", 0))
+                row["total_trades"] = c.get("live_trades",   row.get("total_trades", 0))
+                row["wins"]         = c.get("live_wins",     row.get("wins", 0))
+                row["losses"]       = c.get("live_losses",   row.get("losses", 0))
+        except Exception:
+            pass
+        return row
+
+    # No performance rows yet — build a synthetic row from ea_config live fields
+    try:
+        cfg = sb.table("ea_config").select("*").limit(1).execute()
+        if cfg.data:
+            c = cfg.data[0]
+            if c.get("live_balance"):
+                return {
+                    "balance":       c.get("live_balance", 0),
+                    "equity":        c.get("live_equity",  0),
+                    "drawdown":      (c.get("live_dd_pct", 0) or 0) / 100.0,
+                    "total_pnl":     c.get("live_pnl",     0),
+                    "total_trades":  c.get("live_trades",  0),
+                    "wins":          c.get("live_wins",    0),
+                    "losses":        c.get("live_losses",  0),
+                    "global_accuracy": 0.0,
+                    "timestamp":     c.get("live_ts",      "N/A"),
+                }
+    except Exception:
+        pass
+    return {}
 
 
 def db_get_recent_trades(limit: int = 10) -> list:
