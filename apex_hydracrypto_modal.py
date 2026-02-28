@@ -102,6 +102,15 @@ _CONTAINER_START: datetime = datetime.now(timezone.utc)
 _MR_WARMUP_SECS            = 900    # 15 min warm-up before MR is fully trusted
 _seeded_symbols: set       = set()
 
+# ── Server-side news blackout cache ──────────────────────────────────────────
+# check_news_filter() queries this instead of hitting Supabase on every request.
+# Refreshed at most once per minute from the news_blackouts table.
+# This means the EA's MT5 calendar (macro events) is Layer 1,
+# and the DB-backed crypto/FOMC filter is Layer 2 — independent of the EA.
+_NEWS_CACHE: list          = []     # list of active blackout dicts
+_NEWS_CACHE_UPDATED: datetime = datetime.min.replace(tzinfo=timezone.utc)
+_NEWS_CACHE_TTL_SECS       = 60    # refresh at most once per minute
+
 # ──────────────────────────────────────────────────────────────────────
 #  SCHEMAS
 # ──────────────────────────────────────────────────────────────────────
@@ -831,12 +840,115 @@ def ppo_predict(model, obs: np.ndarray) -> tuple[str, float]:
 #  SECTION 6 — NEWS FILTER
 # ──────────────────────────────────────────────────────────────────────
 
+def _refresh_news_cache():
+    """
+    Pulls active blackouts from Supabase news_blackouts table into _NEWS_CACHE.
+    Called at most once per _NEWS_CACHE_TTL_SECS (60s) to avoid DB hammering
+    in the hot predict path.
+
+    Sources written by _run_news_monitor():
+      - ForexFactory  — macro events (FOMC, CPI, NFP) ±30 min window
+      - Finnhub       — crypto shock headlines (exchange hacks, depeg) 60 min
+      - CryptoCompare — regulatory/ETF/protocol news 60 min
+      - FOMC          — scheduled Fed meeting dates, 24h pre-window
+    """
+    global _NEWS_CACHE, _NEWS_CACHE_UPDATED
+    now = datetime.now(timezone.utc)
+    if (now - _NEWS_CACHE_UPDATED).total_seconds() < _NEWS_CACHE_TTL_SECS:
+        return  # still fresh
+
+    try:
+        from supabase import create_client
+        sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+        rows = (sb.table("news_blackouts")
+                  .select("source,title,currencies,impact,expires_at")
+                  .eq("active", True)
+                  .gte("expires_at", now.isoformat())
+                  .execute().data or [])
+        _NEWS_CACHE = rows
+        _NEWS_CACHE_UPDATED = now
+        if rows:
+            print(f"[NEWS CACHE] {len(rows)} active blackouts: "
+                  + ", ".join(r.get('source','?') + '/' + r.get('impact','?') for r in rows))
+    except Exception as e:
+        print(f"[NEWS CACHE] DB refresh failed (using stale cache): {e}")
+
+
+def _db_news_blocked(symbol: str) -> tuple[bool, str]:
+    """
+    Check symbol against current _NEWS_CACHE.
+    Returns (blocked, reason).
+
+    Matching rules:
+      - currencies == "ALL"  → blocks every symbol (crypto shock / FOMC)
+      - currencies contains symbol's quote or base  → targeted block
+      - impact == "SHOCK" or "FOMC"  → always block if any match
+    """
+    if not _NEWS_CACHE:
+        return False, ""
+
+    sym_up   = symbol.upper()
+    # Extract base (BTC, ETH…) and quote (USD) from e.g. "BTCUSDm"
+    # Strip broker suffix first
+    base_sym = sym_up.rstrip("M")          # BTCUSDm → BTCUSD
+    base     = base_sym[:3]                # BTC
+    quote    = base_sym[3:6] if len(base_sym) >= 6 else "USD"
+
+    now = datetime.now(timezone.utc)
+    for row in _NEWS_CACHE:
+        try:
+            exp = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if exp < now:
+            continue  # expired entry (cache not yet refreshed)
+
+        currencies = (row.get("currencies") or "").upper()
+        impact     = (row.get("impact") or "").upper()
+        source     = row.get("source", "?")
+
+        # ALL block — covers every symbol (used for FOMC and exchange-wide shocks)
+        if currencies == "ALL":
+            return True, f"DB-NewsFilter({source}/{impact}): global block"
+
+        # Currency match — USD news blocks all USD-quoted crypto
+        if quote in currencies or base in currencies:
+            return True, f"DB-NewsFilter({source}/{impact}): {currencies}"
+
+    return False, ""
+
+
 def check_news_filter(p: AIRequest) -> tuple[bool, str]:
-    """Layer 1: EA hard block. Layer 2: server-side buffer."""
+    """
+    Two-layer crypto news filter:
+
+    Layer 1 — EA hard block (MT5 economic calendar, high-impact USD events):
+      EA sends news_blackout=True when FOMC/CPI/NFP within buffer window.
+      This is the fastest response — no network round-trip.
+
+    Layer 2 — Server-side DB block (Supabase news_blackouts table):
+      Modal's news_monitor writes here every 5 min from 4 sources:
+        • ForexFactory  — macro events
+        • Finnhub       — crypto shock headlines
+        • CryptoCompare — ETF/regulatory/protocol news   ← NEW
+        • FOMC calendar — scheduled Fed meetings 24h pre ← NEW
+      Cached in-memory for 60s to keep predict endpoint fast.
+      This layer catches everything the EA calendar cannot:
+        exchange hacks, ETF approvals, SEC rulings, stablecoin depegs,
+        Fed meeting days (24h window — crypto extremely sensitive).
+    """
+    # Layer 1: EA hard block
     if p.news_blackout:
-        return True, "NewsFilter: EA hard block"
+        return True, "NewsFilter-L1: EA calendar block"
     if p.news_minutes_away < p.news_buffer_minutes:
-        return True, f"NewsFilter: event in {p.news_minutes_away}min (buffer={p.news_buffer_minutes})"
+        return True, f"NewsFilter-L1: event in {p.news_minutes_away}min"
+
+    # Layer 2: DB-backed crypto/FOMC filter
+    _refresh_news_cache()
+    blocked, reason = _db_news_blocked(p.symbol)
+    if blocked:
+        return True, f"NewsFilter-L2: {reason}"
+
     return False, ""
 
 
@@ -1423,16 +1535,32 @@ async def health():
 SCHEDULER_STATE_PATH = f"{MODEL_DIR}/scheduler_state.json"
 
 SHOCK_KEYWORDS = [
+    # ── Macro / systemic ──────────────────────────────────────────────
     "emergency rate cut", "emergency rate hike", "unscheduled fed meeting",
     "bank failure", "bank collapse", "bank run on", "systemic banking crisis",
     "stock market circuit breaker", "us treasury default", "us debt default",
     "war declared", "nuclear strike", "financial system collapse",
+    # ── Exchange / infrastructure ────────────────────────────────────
     "exchange hack", "exchange collapse", "exchange insolvency",
-    "stablecoin depeg", "tether depegged", "usdc depegged",
-    "btc etf halted", "crypto market halt", "sec crypto ban",
+    "exchange suspended", "exchange halted", "exchange offline",
     "binance collapse", "coinbase halt", "kraken halt",
-    "bitcoin banned", "crypto banned", "blockchain attack",
-    "51% attack", "smart contract exploit", "defi hack",
+    "bybit hack", "okx halt", "huobi collapse",
+    "crypto market halt", "trading suspended",
+    # ── Stablecoin ───────────────────────────────────────────────────
+    "stablecoin depeg", "tether depegged", "usdc depegged",
+    "usdt depeg", "dai depeg", "stablecoin collapse",
+    # ── Regulatory ───────────────────────────────────────────────────
+    "sec crypto ban", "bitcoin banned", "crypto banned",
+    "sec charges", "cftc charges", "doj charges crypto",
+    "crypto regulation emergency", "crypto crackdown",
+    "etf rejected", "etf denied", "etf approval revoked",
+    # ── Protocol / DeFi ──────────────────────────────────────────────
+    "blockchain attack", "51% attack", "smart contract exploit",
+    "defi hack", "protocol exploit", "bridge hack",
+    "flash loan attack", "rug pull", "exit scam",
+    # ── ETF / institutional ──────────────────────────────────────────
+    "btc etf halted", "bitcoin etf suspended",
+    "blackrock etf", "fidelity etf", "spot bitcoin etf",  # major moves on ETF news
 ]
 
 CRYPTO_RELEVANCE_TERMS = [
@@ -1440,7 +1568,38 @@ CRYPTO_RELEVANCE_TERMS = [
     "federal reserve", "interest rate", "inflation", "cpi", "fomc",
     "central bank", "monetary policy", "rate decision",
     "dollar", "currency", "exchange rate",
+    "btc", "eth", "sol", "bnb", "xrp",  # ticker mentions
+    "sec", "cftc", "doj",               # regulators
+    "etf", "spot etf",                  # ETF news
+    "tether", "usdt", "usdc",           # stablecoin mentions
 ]
+
+# ── Scheduled FOMC meeting dates 2025 (UTC midnight of decision day) ──────────
+# Source: federalreserve.gov — updated annually.
+# Crypto is extremely sensitive to Fed decisions — block 24h before AND 2h after.
+# Wider than forex because crypto moves 3-5× more on Fed news than EUR/USD.
+FOMC_DATES_2025 = [
+    "2025-01-29",  # January FOMC
+    "2025-03-19",  # March FOMC
+    "2025-05-07",  # May FOMC
+    "2025-06-18",  # June FOMC
+    "2025-07-30",  # July FOMC
+    "2025-09-17",  # September FOMC
+    "2025-10-29",  # October FOMC
+    "2025-12-10",  # December FOMC
+]
+# 2026 dates (add as published by Fed)
+FOMC_DATES_2026 = [
+    "2026-01-28",
+    "2026-03-18",
+    "2026-04-29",
+    "2026-06-17",
+    "2026-07-29",
+    "2026-09-16",
+    "2026-10-28",
+    "2026-12-09",
+]
+FOMC_ALL_DATES = FOMC_DATES_2025 + FOMC_DATES_2026
 
 
 def _load_scheduler_state() -> dict:
@@ -1541,6 +1700,71 @@ def _run_news_monitor():
                     print(f"[NEWS] ⚠️ CRYPTO SHOCK: {art.get('headline','')[:70]}")
         except Exception as e:
             print(f"[NEWS] Finnhub failed: {e}")
+
+    # ── Source 3: CryptoCompare latest news ───────────────────────────
+    # Free endpoint — no API key required for basic news feed.
+    # Catches: ETF approvals/rejections, SEC/CFTC enforcement actions,
+    #          exchange outages, major protocol exploits, regulatory bans.
+    try:
+        r = requests.get(
+            "https://min-api.cryptocompare.com/data/v2/news/?lang=EN&sortOrder=latest",
+            timeout=8, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        r.raise_for_status()
+        articles = r.json().get("Data", [])[:30]
+        for art in articles:
+            headline = (art.get("title", "") + " " + art.get("body", "")[:200]).lower()
+            pub_time = datetime.fromtimestamp(art.get("published_on", 0), tz=timezone.utc)
+            if (now - pub_time).total_seconds() > 3600:  # only last hour
+                continue
+            shock_hit  = any(kw in headline for kw in SHOCK_KEYWORDS)
+            crypto_rel = any(t in headline for t in CRYPTO_RELEVANCE_TERMS)
+            if shock_hit and crypto_rel:
+                active_blackouts.append({
+                    "source": "CryptoCompare",
+                    "title": art.get("title", "Breaking")[:120],
+                    "currencies": "ALL",
+                    "impact": "SHOCK",
+                    "event_time": pub_time.isoformat(),
+                    "expires_at": (now + timedelta(minutes=60)).isoformat(),
+                    "active": True,
+                    "updated_at": now.isoformat(),
+                })
+                print(f"[NEWS] ⚠️ CRYPTO NEWS SHOCK: {art.get('title','')[:70]}")
+    except Exception as e:
+        print(f"[NEWS] CryptoCompare failed: {e}")
+
+    # ── Source 4: FOMC scheduled meeting calendar ──────────────────────
+    # Crypto is 3-5× more sensitive to Fed decisions than forex.
+    # Block 24h before decision day AND 2h after (market digests the decision).
+    # Dates are hardcoded from federalreserve.gov — updated once per year.
+    # Window: meeting day 14:00 UTC - 1 day → meeting day 16:00 UTC (2h post-decision).
+    # The actual rate decision is announced at ~14:00 UTC (2pm ET = 7pm UTC in winter).
+    for fomc_date_str in FOMC_ALL_DATES:
+        try:
+            fomc_dt  = datetime.fromisoformat(fomc_date_str).replace(
+                hour=14, minute=0, tzinfo=timezone.utc  # decision ~14:00 ET = ~19:00 UTC (winter)
+            )
+            # Adjust for EDT (summer) — Fed announces at ~18:00 UTC in summer
+            fomc_announce = fomc_dt.replace(hour=19)  # conservative: use later time
+            pre_window  = fomc_announce - timedelta(hours=24)
+            post_window = fomc_announce + timedelta(hours=2)
+            if pre_window <= now <= post_window:
+                active_blackouts.append({
+                    "source": "FOMC",
+                    "title": f"Federal Reserve Rate Decision — {fomc_date_str}",
+                    "currencies": "ALL",   # blocks ALL crypto pairs
+                    "impact": "FOMC",
+                    "event_time": fomc_announce.isoformat(),
+                    "expires_at": post_window.isoformat(),
+                    "active": True,
+                    "updated_at": now.isoformat(),
+                })
+                print(f"[NEWS] 🏦 FOMC BLACKOUT: {fomc_date_str} — "
+                      f"blocking all crypto {pre_window.strftime('%H:%M')}→{post_window.strftime('%H:%M')} UTC")
+                break  # only one FOMC per run
+        except Exception as e:
+            print(f"[NEWS] FOMC date parse failed ({fomc_date_str}): {e}")
 
     try:
         sb.table("news_blackouts").delete().eq("active", True).execute()
