@@ -82,13 +82,17 @@ struct SSymbolData {
    double   rsi, macd, macd_sig, macd_hist;
    double   ema20, ema50, ema200, htf_ema50, htf_ema200;
    double   close, high, low;
-   // AI Decision (latest from Modal)
+   // AI Decision (latest from Modal v5)
    int      regime_id;
-   string   regime_name;
+   string   regime_name;     // granular: "Trend Bull", "Ranging" etc.
+   string   regime_broad;    // coarse:   "TRENDING" | "RANGING" | "VOLATILE"
    double   regime_conf;
+   string   strategy_used;   // trend_following | mean_reversion | breakout
    int      signal;          // -2,-1,0,1,2
    string   signal_name;
    double   confidence;
+   string   ppo_signal;      // BUY | SELL | NONE  (raw PPO output)
+   double   ppo_confidence;
    double   ai_lots;
    double   ai_sl;
    double   ai_tp;
@@ -242,11 +246,15 @@ bool ParseSymbols() {
       StringTrimLeft(parts[i]); StringTrimRight(parts[i]); StringToUpper(parts[i]);
       if(!SymbolSelect(parts[i], true)) { Print("Skip: ", parts[i]); continue; }
       ZeroMemory(g_syms[g_sym_cnt]);
-      g_syms[g_sym_cnt].symbol      = parts[i];
-      g_syms[g_sym_cnt].regime_id   = 5;
-      g_syms[g_sym_cnt].regime_name = "Undefined";
-      g_syms[g_sym_cnt].signal      = 0;
-      g_syms[g_sym_cnt].ai_ok       = false;
+      g_syms[g_sym_cnt].symbol        = parts[i];
+      g_syms[g_sym_cnt].regime_id     = 5;
+      g_syms[g_sym_cnt].regime_name   = "Undefined";
+      g_syms[g_sym_cnt].regime_broad  = "RANGING";
+      g_syms[g_sym_cnt].strategy_used = "";
+      g_syms[g_sym_cnt].signal        = 0;
+      g_syms[g_sym_cnt].ppo_signal    = "NONE";
+      g_syms[g_sym_cnt].ppo_confidence= 0;
+      g_syms[g_sym_cnt].ai_ok         = false;
       g_sym_cnt++;
    }
    ArrayResize(g_syms, g_sym_cnt);
@@ -505,20 +513,24 @@ void CallModalAI(SSymbolData &s) {
       return;
    }
 
-   // Parse JSON response
+   // Parse JSON response — all Modal v5 fields
    string json = CharArrayToString(res);
    s.ai_ok         = true;
-   s.regime_id     = (int)JSONGetInt(json,    "regime_id");
-   s.regime_name   = JSONGetStr(json,         "regime_name");
-   s.regime_conf   = JSONGetDbl(json,         "regime_conf");
-   s.signal        = (int)JSONGetInt(json,    "signal");
-   s.signal_name   = JSONGetStr(json,         "signal_name");
-   s.confidence    = JSONGetDbl(json,         "confidence");
-   s.ai_lots       = JSONGetDbl(json,         "lots");
-   s.ai_sl         = JSONGetDbl(json,         "sl_price");
-   s.ai_tp         = JSONGetDbl(json,         "tp_price");
-   s.ai_rr         = JSONGetDbl(json,         "rr_ratio");
-   s.ai_reasoning  = JSONGetStr(json,         "reasoning");
+   s.regime_id     = (int)JSONGetInt(json, "regime_id");
+   s.regime_name   = JSONGetStr(json,      "regime_name");
+   s.regime_broad  = JSONGetStr(json,      "regime");        // TRENDING|RANGING|VOLATILE
+   s.regime_conf   = JSONGetDbl(json,      "regime_conf");
+   s.strategy_used = JSONGetStr(json,      "strategy_used"); // trend_following|mean_reversion|breakout
+   s.signal        = (int)JSONGetInt(json, "signal");
+   s.signal_name   = JSONGetStr(json,      "signal_name");
+   s.confidence    = JSONGetDbl(json,      "confidence");
+   s.ppo_signal    = JSONGetStr(json,      "ppo_signal");
+   s.ppo_confidence= JSONGetDbl(json,      "ppo_confidence");
+   s.ai_lots       = JSONGetDbl(json,      "lots");
+   s.ai_sl         = JSONGetDbl(json,      "sl_price");
+   s.ai_tp         = JSONGetDbl(json,      "tp_price");
+   s.ai_rr         = JSONGetDbl(json,      "rr_ratio");
+   s.ai_reasoning  = JSONGetStr(json,      "reasoning");
 
    // Apply minimum confidence filter from config
    if(s.confidence < g_cfg.min_confidence) s.signal = 0;
@@ -766,24 +778,49 @@ bool DBPost(string table, string json_body) {
 }
 
 void DBLogTrade(const SSymbolData &s, string action, double price, double pnl) {
+   // `regime`       = s.regime_name  (e.g. "Trend Bull") — granular label
+   // `regime_broad` = s.regime_broad (e.g. "TRENDING")   — strategy-level label
+   // `ai_score`     = s.ai_rr        (R:R ratio from Modal — used as quality score)
+   // `strategy_used`, `ppo_signal`, `ppo_confidence`, `regime_id` are new in v5
+   string closed_at_str = (action == "CLOSE")
+      ? "\"" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\""
+      : "null";
+
    string json = StringFormat(
-      "{\"symbol\":\"%s\",\"action\":\"%s\",\"regime\":\"%s\","
+      "{\"symbol\":\"%s\",\"action\":\"%s\","
+      "\"regime\":\"%s\",\"regime_broad\":\"%s\",\"regime_id\":%d,"
+      "\"strategy_used\":\"%s\","
       "\"signal\":%d,\"confidence\":%.4f,\"ai_score\":%.4f,"
+      "\"ppo_signal\":\"%s\",\"ppo_confidence\":%.4f,"
       "\"lots\":%.4f,\"price\":%.5f,\"sl\":%.5f,\"tp\":%.5f,"
-      "\"pnl\":%.2f,\"won\":%s,\"magic\":%d,\"timestamp\":\"%s\"}",
-      s.symbol, action, s.regime_name, s.signal, s.confidence, s.ai_rr,
-      s.ai_lots, price, s.ai_sl, s.ai_tp, pnl,
-      (pnl>0 ? "true" : (pnl<0 ? "false" : "null")),
-      Inp_Magic, TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS)
+      "\"pnl\":%.2f,\"won\":%s,\"magic\":%d,"
+      "\"closed_at\":%s,\"timestamp\":\"%s\"}",
+      s.symbol, action,
+      s.regime_name, s.regime_broad, s.regime_id,
+      s.strategy_used,
+      s.signal, s.confidence, s.ai_rr,
+      s.ppo_signal, s.ppo_confidence,
+      s.ai_lots, price, s.ai_sl, s.ai_tp,
+      pnl,
+      (pnl > 0 ? "true" : (pnl < 0 ? "false" : "null")),
+      Inp_Magic,
+      closed_at_str,
+      TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS)
    );
    DBPost("trades", json);
 }
 
 void DBLogRegime(const SSymbolData &s) {
    string json = StringFormat(
-      "{\"symbol\":\"%s\",\"regime\":\"%s\",\"confidence\":%.4f,"
-      "\"adx\":%.2f,\"atr\":%.5f,\"rsi\":%.2f,\"ai_score\":%.4f,\"timestamp\":\"%s\"}",
-      s.symbol, s.regime_name, s.regime_conf, s.adx, s.atr, s.rsi,
+      "{\"symbol\":\"%s\","
+      "\"regime\":\"%s\",\"regime_broad\":\"%s\",\"regime_id\":%d,"
+      "\"strategy_used\":\"%s\","
+      "\"confidence\":%.4f,\"adx\":%.2f,\"atr\":%.5f,\"rsi\":%.2f,"
+      "\"ai_score\":%.4f,\"timestamp\":\"%s\"}",
+      s.symbol,
+      s.regime_name, s.regime_broad, s.regime_id,
+      s.strategy_used,
+      s.regime_conf, s.adx, s.atr, s.rsi,
       (double)s.signal * s.confidence,
       TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS)
    );
@@ -974,18 +1011,19 @@ void UpdateDashboard() {
        x,y,9,GRAY,false); y+=lh;
 
    Lbl(DASH+"SEP1","─────────────────────────────────────────────────────────────────────",x,y,7,C'40,50,70',false); y+=12;
-   Lbl(DASH+"HDR",StringFormat("%-10s %-14s %5s %6s %7s %7s %7s %7s %8s",
-       "Symbol","Regime","ADX","RSI","Signal","Conf%","AI%","Lots","Today"),
+   Lbl(DASH+"HDR",StringFormat("%-10s %-12s %-10s %5s %6s %7s %6s %7s %8s",
+       "Symbol","Regime","Strategy","ADX","RSI","Signal","Conf%","Lots","Today"),
        x,y,9,CYAN,false); y+=lh;
 
    for(int i=0;i<g_sym_cnt;i++) {
       SSymbolData s=g_syms[i];
       string sigStr=(s.signal==2?"STRBUY":(s.signal==1?"BUY":(s.signal==-1?"SELL":(s.signal==-2?"STRSEL":"WAIT"))));
+      // Shorten strategy name for display
+      string strat = (s.strategy_used=="trend_following"?"TF":(s.strategy_used=="mean_reversion"?"MR":(s.strategy_used=="breakout"?"BO":"--")));
       color rc=(s.signal>0?GREEN:(s.signal<0?RED:(s.has_pos?GOLD:GRAY)));
-      color aiOk=s.ai_ok?GREEN:GOLD;
-      Lbl(DASH+"SY"+IntegerToString(i),StringFormat("%-10s %-14s %5.1f %6.1f %7s %6.1f%% %6.1f%% %7.2f %+8.2f%s",
-          s.symbol,s.regime_name,s.adx,s.rsi,sigStr,
-          s.regime_conf*100,s.confidence*100,s.ai_lots,s.pnl_today,
+      Lbl(DASH+"SY"+IntegerToString(i),StringFormat("%-10s %-12s %-10s %5.1f %6.1f %7s %5.1f%% %7.2f %+8.2f%s",
+          s.symbol, s.regime_name, strat, s.adx, s.rsi, sigStr,
+          s.confidence*100, s.ai_lots, s.pnl_today,
           s.has_pos?"  ●":""),
           x,y,9,rc,false); y+=lh;
    }
