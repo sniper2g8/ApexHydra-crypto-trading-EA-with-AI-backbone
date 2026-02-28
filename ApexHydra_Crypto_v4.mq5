@@ -465,7 +465,8 @@ void CallModalAI(SSymbolData &s) {
       "\"min_lot\":%.2f,\"max_lot\":%.2f,\"lot_step\":%.2f,"
       "\"point\":%.5f,\"digits\":%d,"
       "\"recent_signals\":%s,\"recent_outcomes\":%s,\"recent_regimes\":%s,"
-      "\"news_blackout\":%s,\"news_minutes_away\":%d,\"news_buffer_minutes\":%d"
+      "\"news_blackout\":%s,\"news_minutes_away\":%d,\"news_buffer_minutes\":%d,"
+      "\"spread\":%.2f,\"bid\":%.5f,\"ask\":%.5f"
       "}",
       sym, EnumToString(Inp_TF), Inp_Magic,
       TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
@@ -486,7 +487,10 @@ void CallModalAI(SSymbolData &s) {
       h_sigs, h_pnls, h_regs,
       (news_mins < Inp_News_Buffer_Min ? "true" : "false"),
       news_mins,
-      Inp_News_Buffer_Min
+      Inp_News_Buffer_Min,
+      (double)SymbolInfoInteger(sym, SYMBOL_SPREAD),
+      SymbolInfoDouble(sym, SYMBOL_BID),
+      SymbolInfoDouble(sym, SYMBOL_ASK)
    );
 
    // HTTP POST to Modal

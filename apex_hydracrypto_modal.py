@@ -945,6 +945,15 @@ async def predict(request: FastAPIRequest):
     except Exception as e:
         return JSONResponse({"error": f"Invalid payload: {e}"}, status_code=422)
 
+    try:
+        return await _predict_inner(p)
+    except Exception as e:
+        import traceback
+        print(f"[PREDICT ERROR] {p.symbol}: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": f"Predict failed: {e}"}, status_code=500)
+
+
+async def _predict_inner(p: AIRequest):
     # News filter
     news_blocked, news_reason = check_news_filter(p)
 
@@ -1764,9 +1773,8 @@ def performance_watch():
     now = datetime.now(timezone.utc).isoformat()
 
     try:
-        # Select only guaranteed base columns — live_* may not exist yet
         cfg_row = sb.table("ea_config").select(
-            "id,halted,max_dd_pct,updated_by"
+            "id,halted,max_dd_pct,live_dd_pct,live_ts,updated_by"
         ).limit(1).execute()
         if not cfg_row.data:
             print("[PERFWATCH] No ea_config row found — skipping")
@@ -1776,24 +1784,9 @@ def performance_watch():
         cfg_id     = cfg["id"]
         halted     = bool(cfg.get("halted", False))
         max_dd     = float(cfg.get("max_dd_pct") or 20.0)
+        live_dd    = float(cfg.get("live_dd_pct") or 0.0)
+        live_ts    = cfg.get("live_ts", "unknown")
         updated_by = cfg.get("updated_by", "")
-
-        # Try live_dd_pct column — may not exist if schema not updated yet
-        live_dd = 0.0
-        live_ts = "unknown"
-        try:
-            live_row = sb.table("ea_config").select("live_dd_pct,live_ts").limit(1).execute()
-            if live_row.data:
-                live_dd = float(live_row.data[0].get("live_dd_pct") or 0.0)
-                live_ts = str(live_row.data[0].get("live_ts") or "unknown")
-        except Exception:
-            # Columns not in schema — fall back to performance table
-            try:
-                perf_row = sb.table("performance").select("drawdown").order("timestamp", desc=True).limit(1).execute()
-                if perf_row.data:
-                    live_dd = float(perf_row.data[0].get("drawdown") or 0.0) * 100.0
-            except Exception:
-                pass
 
         # Auto-halt if live DD exceeds threshold and EA hasn't already halted
         if live_dd >= max_dd and not halted:
