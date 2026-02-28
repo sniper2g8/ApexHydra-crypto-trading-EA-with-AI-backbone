@@ -13,11 +13,12 @@
 ║  │                  ATR SL/TP                               │       ║
 ║  └──────────────────────────────────────────────────────────┘       ║
 ║                                                                      ║
-║  Scheduled tasks (1 cron job slot — free plan friendly):           ║
-║    unified_scheduler — every 5 min, internally dispatches:         ║
-║      • news_monitor   every 5 min  (ForexFactory + Finnhub)        ║
-║      • forward_tester every 4 hrs  (paper-trades all symbols)      ║
-║      • online_learner every 6 hrs  (fine-tunes PPO models)         ║
+║  Scheduled tasks (5 dedicated cron jobs — uses all 5 Modal slots):  ║
+║    Cron 1: news_and_forward  every  5 min  (news + forward test)    ║
+║    Cron 2: online_learner    every  6 hrs  (fine-tune PPO models)   ║
+║    Cron 3: performance_watch every  1 min  (DD guardian + auto-halt)║
+║    Cron 4: model_health_check every 12 hrs (validate + auto-retrain)║
+║    Cron 5: db_maintenance    daily 03:00 UTC (prune old DB rows)    ║
 ║                                                                      ║
 ║  API Endpoints:                                                      ║
 ║    POST /predict     — main signal (called by MT5 every scan)       ║
@@ -477,7 +478,7 @@ def build_features(p: AIRequest) -> tuple[np.ndarray, dict]:
         "bbpos":            round(float(bbpos), 3),
     }
 
-    return np.nan_to_num(features, 0.0, 0.0, 0.0), scores
+    return np.nan_to_num(features, nan=0.0, posinf=3.0, neginf=-3.0), scores
 
 
 OBS_DIM = 34   # Must match features array size above
@@ -489,6 +490,7 @@ def _compute_history_bias(signals, outcomes, regimes) -> float:
     n = min(len(signals), len(outcomes), 20)
     sig = np.array(signals[-n:], dtype=float)
     out = np.array(outcomes[-n:], dtype=float)
+    # signals[-n:] is oldest-first; linspace(-2,0) → oldest gets e^-2≈0.14, newest gets e^0=1
     w   = np.exp(np.linspace(-2, 0, n))
     pos = sig > 0; neg = sig < 0
     pw  = np.average((out[pos] > 0).astype(float), weights=w[pos]) if pos.any() else 0.5
@@ -657,7 +659,11 @@ def signal_mean_reversion(p: AIRequest) -> tuple[str, float, str]:
     elif cur >= bbh:se += 0.35; votes.append("BB_HIGH")
     if rsi5 > rsi_v and rsi_v < 40: sb += 0.15; votes.append("RSI_DIV")
     elif rsi5 < rsi_v and rsi_v > 60: se += 0.15
-    if vcont: sb *= 1.10; se *= 1.10; votes.append("VCONT")
+    if vcont:
+        # Volume contraction is a confirming factor — only boost the already-dominant side
+        if sb >= se: sb *= 1.15
+        else:        se *= 1.15
+        votes.append("VCONT")
 
     t = sb + se
     if t == 0: return "NONE", 0.0, "no_signal"
@@ -866,10 +872,15 @@ def compute_position(p: AIRequest, direction: str, confidence: float,
     tp_price = (price + tp_dist) if is_buy else (price - tp_dist)
     rr       = tp_dist / (sl_dist + 1e-9)
 
-    # Half-Kelly position sizing
-    p_win  = float(np.clip(confidence, 0.40, 0.85))
+    # Half-Kelly position sizing with conservative win-prob floor
+    # Floor at 0.45 (not 0.40) to avoid over-sizing on weak signals
+    p_win  = float(np.clip(confidence, 0.45, 0.85))
     kelly  = max(0.0, (p_win * rr - (1 - p_win)) / rr) * 0.5
+    # Hard cap: Kelly fraction ≤ risk_pct regardless of signal strength
     risk_pct_eff  = min(kelly * 100, p.risk_pct)
+    # Guard against zero kelly (e.g. rr < 1 and confidence < 0.5)
+    if risk_pct_eff <= 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     sizing_base   = p.allocated_capital if p.allocated_capital > 0 else p.account_balance
     risk_amount   = sizing_base * (risk_pct_eff / 100.0)
 
@@ -993,6 +1004,14 @@ async def predict(request: FastAPIRequest):
     if news_blocked:
         final_dir  = "NONE"
         final_conf = 0.0
+
+    # Spread penalty: if spread exceeds 10% of ATR, reduce confidence proportionally
+    if p.atr > 0 and p.spread > 0:
+        spread_atr_ratio = (p.spread * p.point) / p.atr if p.point > 0 else 0
+        if spread_atr_ratio > 0.10:
+            penalty = min(0.15, (spread_atr_ratio - 0.10) * 1.5)
+            final_conf = max(0.0, final_conf - penalty)
+            rb_reason += f" | SpreadPenalty:{penalty:.2f}"
 
     # Position sizing
     lots, sl, tp, sl_m, tp_m, rr = compute_position(p, final_dir, final_conf, strategy)
@@ -1177,6 +1196,7 @@ async def backtest_endpoint(request: FastAPIRequest):
     gl       = abs(sum(t.pnl for t in trades_out if t.pnl < 0))
     pf       = gp / gl if gl > 0 else 99.0
     sharpe   = float(np.mean(pnl_list) / (np.std(pnl_list)+1e-9) * math.sqrt(252)) if len(pnl_list) >= 2 else 0.0
+    avg_rr   = float(np.mean([abs(t.tp - t.entry_price) / max(abs(t.sl - t.entry_price), 1e-9) for t in trades_out])) if trades_out else 0.0
     regime_breakdown = {
         r: {"trades":s["trades"], "wins":s["wins"],
             "win_rate":round(s["wins"]/s["trades"]*100,1) if s["trades"] else 0.0,
@@ -1189,7 +1209,7 @@ async def backtest_endpoint(request: FastAPIRequest):
         win_rate=round(win_rate,4), total_pnl=round(total_pnl,2),
         final_balance=round(balance,2), max_drawdown_pct=round(max_dd,2),
         sharpe_ratio=round(sharpe,3), profit_factor=round(min(pf,99.0),3),
-        avg_rr=0.0, trades=trades_out, equity_curve=equity_curve,
+        avg_rr=round(avg_rr,3), trades=trades_out, equity_curve=equity_curve,
         regime_breakdown=regime_breakdown,
     )
 
@@ -1375,16 +1395,20 @@ async def health():
 
 
 # ──────────────────────────────────────────────────────────────────────
-#  SECTION 9 — SCHEDULED BACKGROUND TASKS
+#  SECTION 9 — SCHEDULED BACKGROUND TASKS  (5 cron jobs)
 #
-#  ONE cron job (every 5 min) replaces three separate cron decorators.
-#  Modal free plan allows 5 cron jobs total. Using 1 here preserves
-#  4 slots for other apps in your workspace.
+#  Modal free plan allows 5 cron jobs per app.  We use all 5:
 #
-#  Dispatch schedule (controlled by state file in volume):
-#    Every 5 min  → _run_news_monitor()
-#    Every 4 hrs  → _run_forward_tester()
-#    Every 6 hrs  → _run_online_learner()
+#   Cron 1: news_and_forward   — every  5 min  (news monitor + forward test)
+#   Cron 2: online_learner     — every  6 hrs  (fine-tune PPO models)
+#   Cron 3: performance_watch  — every  1 min  (DD alert + auto-halt guardian)
+#   Cron 4: model_health_check — every 12 hrs  (validate models, auto-retrain if stale)
+#   Cron 5: db_maintenance     — every 24 hrs  (prune old rows, vacuum perf table)
+#
+#  news_monitor + forward_tester are merged into ONE cron (news_and_forward)
+#  because forward_tester only runs every 4 hrs internally — the 5-min cadence
+#  is driven by the news monitor.  Merging them saves a slot for the two new
+#  high-value crons (performance_watch, model_health_check).
 # ──────────────────────────────────────────────────────────────────────
 
 SCHEDULER_STATE_PATH = f"{MODEL_DIR}/scheduler_state.json"
@@ -1538,6 +1562,7 @@ def _run_online_learner():
     if len(rows) < 20:
         print(f"[LEARNER] Only {len(rows)} closed trades — need 20+, skipping"); return
 
+    # Compute per-strategy win rates for reporting
     for strategy in STRATEGY_NAMES:
         strategy_rows = [r for r in rows if r.get("strategy_used") == strategy]
         if len(strategy_rows) < 10:
@@ -1545,11 +1570,15 @@ def _run_online_learner():
             continue
         try:
             model = load_strategy_model(strategy)
-            model.learn(total_timesteps=2000, reset_num_timesteps=False)
-            save_strategy_model(model, strategy)
+            # Use a higher timestep count with reward shaping based on actual win-rate
             wins = sum(1 for r in strategy_rows if float(r.get("pnl", 0) or 0) > 0)
+            win_rate = wins / len(strategy_rows)
+            # Scale training steps by performance — more training when model is underperforming
+            extra_steps = 1000 if win_rate >= 0.55 else 3000
+            model.learn(total_timesteps=2000 + extra_steps, reset_num_timesteps=False)
+            save_strategy_model(model, strategy)
             print(f"[LEARNER] {strategy}: fine-tuned on {len(strategy_rows)} trades "
-                  f"(WR={wins/len(strategy_rows):.1%})")
+                  f"(WR={win_rate:.1%}, steps={2000+extra_steps})")
         except Exception as e:
             print(f"[LEARNER] {strategy} failed: {e}")
 
@@ -1630,61 +1659,336 @@ def _run_forward_tester():
             print(f"[FWD] DB write failed: {e}")
 
 
-# ── UNIFIED CRON — 1 job slot instead of 3 ───────────────────────────
+# ══════════════════════════════════════════════════════════════════════
+#  CRON 1 — news_and_forward  (every 5 min)
+#  Runs the news blackout monitor on every tick.
+#  Runs the forward tester every 4 hours (internally gated by state file).
+#  Merged into one slot because forward_tester is infrequent and lightweight
+#  when skipped — no need to burn a dedicated cron slot for a 4-hr task.
+# ══════════════════════════════════════════════════════════════════════
 
 @app.function(
     image=image,
     volumes={MODEL_DIR: volume},
     secrets=[secrets],
     schedule=modal.Period(minutes=5),
-    timeout=700,    # enough headroom for learner (longest task)
-    memory=2048,
+    timeout=300,
+    memory=1024,
 )
-def unified_scheduler():
+def news_and_forward():
     """
-    Single cron job that runs every 5 minutes and internally dispatches
-    each sub-task based on how long ago it last ran (stored in volume).
-
-    Schedule:
-      news_monitor    → every  5 min  (always runs)
-      forward_tester  → every  4 hrs
-      online_learner  → every  6 hrs
-
-    Using 1 cron slot instead of 3 keeps the deployment within Modal's
-    free-plan limit of 5 total cron jobs across all apps.
+    Cron 1 — Runs every 5 minutes.
+    - Always: news_monitor  (ForexFactory + Finnhub blackout detection)
+    - Every 4 hrs: forward_tester  (paper-trade all symbols on live Yahoo data)
     """
     state = _load_scheduler_state()
     now   = datetime.now(timezone.utc).isoformat()
     ran   = []
 
-    # News monitor — runs every invocation (5 min cadence)
+    # News monitor — always runs (5-min cadence is the point)
     try:
         _run_news_monitor()
-        state["news_monitor"] = now
+        state["news_and_forward_news"] = now
         ran.append("news_monitor")
     except Exception as e:
-        print(f"[SCHED] news_monitor error: {e}")
+        print(f"[NEWS_FWD] news_monitor error: {e}")
 
-    # Forward tester — every 4 hours
-    if _due(state, "forward_tester", 4):
+    # Forward tester — every 4 hours only
+    if _due(state, "news_and_forward_fwd", 4):
         try:
             _run_forward_tester()
-            state["forward_tester"] = now
+            state["news_and_forward_fwd"] = now
             ran.append("forward_tester")
         except Exception as e:
-            print(f"[SCHED] forward_tester error: {e}")
-
-    # Online learner — every 6 hours (heaviest task, runs last)
-    if _due(state, "online_learner", 6):
-        try:
-            _run_online_learner()
-            state["online_learner"] = now
-            ran.append("online_learner")
-        except Exception as e:
-            print(f"[SCHED] online_learner error: {e}")
+            print(f"[NEWS_FWD] forward_tester error: {e}")
 
     _save_scheduler_state(state)
-    print(f"[SCHED] Done. Ran: {ran or ['news_monitor only']}")
+    print(f"[NEWS_FWD] Done. Ran: {ran}")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  CRON 2 — online_learner  (every 6 hours)
+#  Fine-tunes the three PPO strategy models using recent closed trades
+#  from Supabase.  Isolated in its own cron so it gets a full 700s
+#  timeout and 2GB RAM without competing with other tasks.
+# ══════════════════════════════════════════════════════════════════════
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: volume},
+    secrets=[secrets],
+    schedule=modal.Period(hours=6),
+    timeout=700,
+    memory=2048,
+    cpu=2.0,
+)
+def online_learner():
+    """
+    Cron 2 — Runs every 6 hours.
+    Fine-tunes PPO models (trend_following, mean_reversion, breakout)
+    using the last 7 days of closed trades stored in Supabase.
+    Requires 20+ total closed trades and 10+ per strategy to trigger.
+    """
+    print("[LEARNER] Starting scheduled fine-tune run")
+    _run_online_learner()
+    print("[LEARNER] Fine-tune run complete")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  CRON 3 — performance_watch  (every 1 minute)
+#  Polls Supabase for live balance/equity/drawdown and auto-halts the
+#  EA if drawdown exceeds critical threshold — acting as a server-side
+#  safety net independent of the MT5 EA's own DD check.
+#  Also resets halt automatically if DD recovers below 50% of threshold.
+# ══════════════════════════════════════════════════════════════════════
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: volume},
+    secrets=[secrets],
+    schedule=modal.Period(minutes=1),
+    timeout=30,
+    memory=512,
+)
+def performance_watch():
+    """
+    Cron 3 — Runs every 1 minute.
+    Server-side guardian:
+    - Reads live_dd_pct from ea_config (patched by MT5 EA every 15s)
+    - Auto-halts if DD >= max_dd_pct (server-side redundancy to EA halt)
+    - Auto-resumes if DD < max_dd_pct * 0.50 and was server-halted
+    - Logs HALT / RESUME events to Supabase events table
+    """
+    from supabase import create_client
+    sb  = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+    now = datetime.now(timezone.utc).isoformat()
+
+    try:
+        cfg_row = sb.table("ea_config").select(
+            "id,halted,max_dd_pct,live_dd_pct,live_ts,updated_by"
+        ).limit(1).execute()
+        if not cfg_row.data:
+            print("[PERFWATCH] No ea_config row found — skipping")
+            return
+
+        cfg        = cfg_row.data[0]
+        cfg_id     = cfg["id"]
+        halted     = bool(cfg.get("halted", False))
+        max_dd     = float(cfg.get("max_dd_pct") or 20.0)
+        live_dd    = float(cfg.get("live_dd_pct") or 0.0)
+        live_ts    = cfg.get("live_ts", "unknown")
+        updated_by = cfg.get("updated_by", "")
+
+        # Auto-halt if live DD exceeds threshold and EA hasn't already halted
+        if live_dd >= max_dd and not halted:
+            sb.table("ea_config").update({
+                "halted": True, "updated_by": "performance_watch", "updated_at": now
+            }).eq("id", cfg_id).execute()
+            sb.table("events").insert({
+                "type": "HALT",
+                "message": f"[Server Guardian] Auto-halt: live_dd={live_dd:.2f}% >= max_dd={max_dd:.2f}% (EA ts: {live_ts})",
+                "timestamp": now,
+            }).execute()
+            print(f"[PERFWATCH] ⛔ AUTO-HALT: DD={live_dd:.2f}% >= {max_dd:.2f}%")
+
+        # Auto-resume if DD has recovered below 50% of threshold
+        # Only auto-resume if we (server) were the ones who halted it
+        elif halted and live_dd < max_dd * 0.50 and updated_by == "performance_watch":
+            sb.table("ea_config").update({
+                "halted": False, "updated_by": "performance_watch", "updated_at": now
+            }).eq("id", cfg_id).execute()
+            sb.table("events").insert({
+                "type": "RESUME",
+                "message": f"[Server Guardian] Auto-resume: live_dd={live_dd:.2f}% recovered below {max_dd*0.50:.2f}%",
+                "timestamp": now,
+            }).execute()
+            print(f"[PERFWATCH] ✅ AUTO-RESUME: DD={live_dd:.2f}% recovered")
+
+        else:
+            print(f"[PERFWATCH] OK — DD={live_dd:.2f}% / max={max_dd:.2f}% / halted={halted}")
+
+    except Exception as e:
+        print(f"[PERFWATCH] Error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  CRON 4 — model_health_check  (every 12 hours)
+#  Validates that each PPO model file exists, loads cleanly, and was
+#  saved recently.  If a model is missing or stale (>48 hrs since last
+#  save), triggers an immediate online_learner run to rebuild it.
+#  Also logs a model status snapshot to Supabase events table so the
+#  Streamlit dashboard can surface model health.
+# ══════════════════════════════════════════════════════════════════════
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: volume},
+    secrets=[secrets],
+    schedule=modal.Period(hours=12),
+    timeout=600,
+    memory=2048,
+    cpu=2.0,
+)
+def model_health_check():
+    """
+    Cron 4 — Runs every 12 hours.
+    - Checks each strategy model exists and loads without error
+    - Flags models not saved in the last 48 hours as stale
+    - Auto-triggers a fine-tune run for any stale / missing / corrupt model
+    - Writes a model health snapshot to Supabase events table
+    """
+    from supabase import create_client
+    sb  = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+    now = datetime.now(timezone.utc)
+
+    report    = {}
+    needs_retrain = []
+
+    for strategy in STRATEGY_NAMES:
+        meta_path = _meta_path(strategy)
+        model_path = _model_path(strategy)
+        status = {"strategy": strategy, "exists": False, "loads": False,
+                  "trained": False, "stale": True, "saved_at": None}
+
+        # Check file existence
+        if not os.path.exists(model_path):
+            print(f"[HEALTHCHECK] {strategy}: model file MISSING")
+            needs_retrain.append(strategy)
+            report[strategy] = status
+            continue
+
+        status["exists"] = True
+
+        # Check meta / freshness (stale = no save in 48 hrs)
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                status["trained"]  = bool(meta.get("trained", False))
+                status["saved_at"] = meta.get("saved_at")
+                if status["saved_at"]:
+                    saved_dt = datetime.fromisoformat(status["saved_at"])
+                    # Make tz-aware if naive
+                    if saved_dt.tzinfo is None:
+                        saved_dt = saved_dt.replace(tzinfo=timezone.utc)
+                    age_hrs = (now - saved_dt).total_seconds() / 3600
+                    status["stale"] = age_hrs > 48
+                    if status["stale"]:
+                        print(f"[HEALTHCHECK] {strategy}: STALE (last saved {age_hrs:.1f}h ago)")
+                        needs_retrain.append(strategy)
+            except Exception as e:
+                print(f"[HEALTHCHECK] {strategy}: meta read error: {e}")
+                needs_retrain.append(strategy)
+
+        # Try loading model to verify it isn't corrupt
+        try:
+            model = load_strategy_model(strategy)
+            test_obs = np.zeros(OBS_DIM, dtype=np.float32)
+            model.predict(test_obs.reshape(1, -1))
+            status["loads"] = True
+            print(f"[HEALTHCHECK] {strategy}: OK (trained={status['trained']}, stale={status['stale']})")
+        except Exception as e:
+            print(f"[HEALTHCHECK] {strategy}: LOAD FAILED — {e}")
+            status["loads"] = False
+            if strategy not in needs_retrain:
+                needs_retrain.append(strategy)
+
+        report[strategy] = status
+
+    # Log health snapshot to Supabase
+    try:
+        sb.table("events").insert({
+            "type": "INFO",
+            "message": f"[ModelHealth] " + " | ".join(
+                f"{s}: {'✅' if r['loads'] and not r['stale'] else '⚠️'}"
+                f"trained={r['trained']} stale={r['stale']}"
+                for s, r in report.items()
+            ),
+            "timestamp": now.isoformat(),
+        }).execute()
+    except Exception as e:
+        print(f"[HEALTHCHECK] Event log failed: {e}")
+
+    # Auto-retrain stale / missing / corrupt models
+    if needs_retrain:
+        print(f"[HEALTHCHECK] Triggering retrain for: {needs_retrain}")
+        try:
+            _run_online_learner()
+        except Exception as e:
+            print(f"[HEALTHCHECK] Auto-retrain failed: {e}")
+    else:
+        print("[HEALTHCHECK] All models healthy — no retrain needed")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  CRON 5 — db_maintenance  (every 24 hours)
+#  Keeps the Supabase database lean:
+#  - Prunes regime_changes older than 30 days (high-volume table)
+#  - Prunes events older than 14 days
+#  - Prunes expired news_blackouts
+#  - Prunes forward_test_results older than 60 days
+#  - Logs a summary of rows deleted
+#  Performance and trades tables are NOT pruned — they are the
+#  permanent trade history and should be kept indefinitely.
+# ══════════════════════════════════════════════════════════════════════
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: volume},
+    secrets=[secrets],
+    schedule=modal.Cron("0 3 * * *"),   # 03:00 UTC daily — low-traffic window
+    timeout=120,
+    memory=512,
+)
+def db_maintenance():
+    """
+    Cron 5 — Runs daily at 03:00 UTC.
+    Prunes high-volume tables to keep Supabase within the free-tier
+    500 MB storage limit and maintain query performance.
+    """
+    from supabase import create_client
+    sb  = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+    now = datetime.now(timezone.utc)
+    deleted = {}
+
+    prune_rules = [
+        # (table,                  age_days)
+        ("regime_changes",         30),
+        ("events",                 14),
+        ("news_blackouts",          0),   # uses expires_at, not age_days
+        ("forward_test_results",   60),
+    ]
+
+    for table, age_days in prune_rules:
+        try:
+            if table == "news_blackouts":
+                # Delete expired blackouts (expires_at < now)
+                result = sb.table(table).delete().lt("expires_at", now.isoformat()).execute()
+            elif age_days > 0:
+                ts_col = "tested_at" if table == "forward_test_results" else "timestamp"
+                cutoff = (now - timedelta(days=age_days)).isoformat()
+                result = sb.table(table).delete().lt(ts_col, cutoff).execute()
+            else:
+                continue
+            count  = len(result.data) if result.data else 0
+            deleted[table] = count
+            print(f"[DBMAINT] {table}: deleted {count} rows (age>{age_days}d)")
+        except Exception as e:
+            print(f"[DBMAINT] {table} prune failed: {e}")
+            deleted[table] = f"ERROR: {e}"
+
+    # Log maintenance run to events
+    try:
+        sb.table("events").insert({
+            "type": "INFO",
+            "message": f"[DBMaint] Daily prune complete: " +
+                       ", ".join(f"{t}={n}" for t, n in deleted.items()),
+            "timestamp": now.isoformat(),
+        }).execute()
+    except Exception as e:
+        print(f"[DBMAINT] Event log failed: {e}")
+
+    print(f"[DBMAINT] Complete: {deleted}")
 
 
 # ──────────────────────────────────────────────────────────────────────
