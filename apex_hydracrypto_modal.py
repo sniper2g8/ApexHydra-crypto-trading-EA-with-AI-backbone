@@ -3,7 +3,7 @@
 ║            ApexHydra Crypto — Modal AI Engine Server                ║
 ║  Decides: Regime | Signal | Lot Size | Stop Loss | Take Profit       ║
 ║                                                                      ║
-║  Deploy:  modal deploy apex_hydra_modal.py                           ║
+║  Deploy:  modal deploy apex_hydracrypto_modal.py                           ║
 ║  Docs:    https://modal.com/docs                                     ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """
@@ -20,7 +20,7 @@ from pydantic import BaseModel
 #  MODAL APP + IMAGE
 # ──────────────────────────────────────────────────────────────────────
 
-app = modal.App("apexhydra-crypto")
+app = modal.App("apex-hydracrypto")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -36,11 +36,11 @@ image = (
 )
 
 # Persistent volume — stores model weights & trade memory between calls
-volume = modal.Volume.from_name("apexhydra-models", create_if_missing=True)
+volume = modal.Volume.from_name("apex-hydracrypto-models", create_if_missing=True)
 MODEL_DIR = "/models"
 
-# Supabase secret (set via: modal secret create apexhydra-secrets)
-secrets = modal.Secret.from_name("apexhydra-secrets", required=False)
+# Supabase secret (set via: modal secret create apex-hydracrypto-secrets)
+secrets = modal.Secret.from_name("apex-hydracrypto-secrets", required=False)
 
 # ──────────────────────────────────────────────────────────────────────
 #  SCHEMAS
@@ -548,7 +548,7 @@ def _normalize_lots(lots: float, p: AIRequest) -> float:
     keep_warm=1,
     max_containers=5,
 )
-@modal.fastapi_endpoint(method="POST", label="apexhydra-predict")
+@modal.fastapi_endpoint(method="POST", label="apex-hydracrypto-predict")
 async def predict(request: AIRequest) -> AIResponse:
     """
     Main AI prediction endpoint.
@@ -600,7 +600,7 @@ async def predict(request: AIRequest) -> AIResponse:
 
 # ── Health check ──────────────────────────────────────────────────────
 @app.function(image=image, timeout=10)
-@modal.fastapi_endpoint(method="GET", label="apexhydra-health")
+@modal.fastapi_endpoint(method="GET", label="apex-hydracrypto-health")
 async def health():
     return {
         "status":  "ok",
