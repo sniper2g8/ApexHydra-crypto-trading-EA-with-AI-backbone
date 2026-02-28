@@ -148,6 +148,7 @@ int          g_total_losses  = 0;
 double       g_total_pnl     = 0;
 
 datetime     g_last_db_sync  = 0;
+double       g_last_live_eq  = 0;    // last equity pushed to live patch
 
 string       g_log_lines[];
 int          g_log_cnt       = 0;
@@ -217,9 +218,17 @@ void OnTick() {
    if(eq > g_peak_equity) g_peak_equity = eq;
    g_dd_pct = (g_peak_equity > 0) ? (1.0 - eq / g_peak_equity) * 100.0 : 0;
 
+   // Realtime live patch — fires on every tick when equity changes >= $0.01
+   // Lightweight PATCH only (no INSERT) — keeps dashboard & Telegram realtime
+   if(Inp_DB_Enable && MathAbs(eq - g_last_live_eq) >= 0.01) {
+      DBPatchLive();
+      g_last_live_eq = eq;
+   }
+
    if(g_cfg.halted || g_cfg.paused) return;
    ManagePositions();
 }
+
 
 void OnTimer() {
    CheckRisk();
@@ -465,8 +474,7 @@ void CallModalAI(SSymbolData &s) {
       "\"min_lot\":%.2f,\"max_lot\":%.2f,\"lot_step\":%.2f,"
       "\"point\":%.5f,\"digits\":%d,"
       "\"recent_signals\":%s,\"recent_outcomes\":%s,\"recent_regimes\":%s,"
-      "\"news_blackout\":%s,\"news_minutes_away\":%d,\"news_buffer_minutes\":%d,"
-      "\"spread\":%.2f,\"bid\":%.5f,\"ask\":%.5f"
+      "\"news_blackout\":%s,\"news_minutes_away\":%d,\"news_buffer_minutes\":%d"
       "}",
       sym, EnumToString(Inp_TF), Inp_Magic,
       TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
@@ -487,10 +495,7 @@ void CallModalAI(SSymbolData &s) {
       h_sigs, h_pnls, h_regs,
       (news_mins < Inp_News_Buffer_Min ? "true" : "false"),
       news_mins,
-      Inp_News_Buffer_Min,
-      (double)SymbolInfoInteger(sym, SYMBOL_SPREAD),
-      SymbolInfoDouble(sym, SYMBOL_BID),
-      SymbolInfoDouble(sym, SYMBOL_ASK)
+      Inp_News_Buffer_Min
    );
 
    // HTTP POST to Modal
@@ -831,13 +836,39 @@ void DBLogRegime(const SSymbolData &s) {
    DBPost("regime_changes", json);
 }
 
+// ── Realtime live patch — called on every tick ──────────────────────
+// Tiny PATCH to ea_config only. No INSERT. Keeps dashboard realtime.
+void DBPatchLive() {
+   if(!Inp_DB_Enable) return;
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
+   string ts  = TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS);
+   string patch = StringFormat(
+      "{\"live_balance\":%.2f,\"live_equity\":%.2f,"
+      "\"live_dd_pct\":%.4f,\"live_pnl\":%.2f,"
+      "\"live_trades\":%d,\"live_wins\":%d,\"live_losses\":%d,"
+      "\"live_ts\":\"%s\"}",
+      bal, eq, g_dd_pct, g_total_pnl,
+      g_total_trades, g_total_wins, g_total_losses, ts
+   );
+   string url     = Inp_DB_URL + "/rest/v1/ea_config?magic=eq." + IntegerToString(Inp_Magic);
+   string headers = "Content-Type: application/json\r\n"
+                  + "apikey: "         + Inp_DB_Key + "\r\n"
+                  + "Authorization: Bearer " + Inp_DB_Key + "\r\n"
+                  + "Prefer: return=minimal\r\n";
+   char req[], res[];
+   StringToCharArray(patch, req, 0, StringLen(patch));
+   string res_hdr;
+   WebRequest("PATCH", url, headers, 3000, req, res, res_hdr);
+}
+
 void DBSyncPerformance(bool final_snap) {
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
    double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
    double acc = (g_total_trades > 0 ? (double)g_total_wins / g_total_trades : 0.5);
    string ts  = TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS);
 
-   // ── INSERT a history row (time-series for equity curve chart) ─────
+   // INSERT history row for equity curve chart (15s cadence)
    string json = StringFormat(
       "{\"balance\":%.2f,\"equity\":%.2f,\"drawdown\":%.4f,"
       "\"total_trades\":%d,\"wins\":%d,\"losses\":%d,"
@@ -850,29 +881,9 @@ void DBSyncPerformance(bool final_snap) {
       ts
    );
    DBPost("performance", json);
-
-   // ── PATCH ea_config with live balance snapshot so Telegram /status ─
-   //    always shows current figures even between full performance syncs.
-   //    This piggybacks on the existing ea_config row (magic key).
-   string patch = StringFormat(
-      "{\"live_balance\":%.2f,\"live_equity\":%.2f,"
-      "\"live_dd_pct\":%.2f,\"live_pnl\":%.2f,"
-      "\"live_trades\":%d,\"live_wins\":%d,\"live_losses\":%d,"
-      "\"live_ts\":\"%s\"}",
-      bal, eq, g_dd_pct, g_total_pnl,
-      g_total_trades, g_total_wins, g_total_losses, ts
-   );
-   // PATCH to ea_config so Streamlit + Telegram read it immediately
-   if(!Inp_DB_Enable) return;
-   string url     = Inp_DB_URL + "/rest/v1/ea_config?magic=eq." + IntegerToString(Inp_Magic);
-   string headers = "Content-Type: application/json\r\n"
-                  + "apikey: "         + Inp_DB_Key + "\r\n"
-                  + "Authorization: Bearer " + Inp_DB_Key + "\r\n"
-                  + "Prefer: return=minimal\r\n";
-   char req[], res[];
-   StringToCharArray(patch, req, 0, StringLen(patch));
-   string res_hdr;
-   WebRequest("PATCH", url, headers, 5000, req, res, res_hdr);
+   // Also update live patch so values are always fresh
+   DBPatchLive();
+   g_last_live_eq = eq;
 }
 
 string BuildEventJSON(string type, string msg) {
