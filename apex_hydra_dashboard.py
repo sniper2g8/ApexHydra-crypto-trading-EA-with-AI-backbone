@@ -560,8 +560,8 @@ with T[7]:
     with btb:
         st.markdown("#### Settings")
         bsym=st.text_input("Symbol","BTCUSD"); btf=st.text_input("Timeframe","H1")
-        bbal=st.number_input("Balance",10000.0,step=500.0); brisk=st.number_input("Risk %",1.0,.1,10.,.1)
-        brr=st.number_input("Min R:R",1.5,1.,5.,.1); bconf=st.number_input("Min Conf",0.55,.30,.95,.01)
+        bbal=st.number_input("Balance",min_value=100.0,value=10000.0,step=500.0); brisk=st.number_input("Risk %",min_value=0.1,max_value=10.0,value=1.0,step=0.1)
+        brr=st.number_input("Min R:R",min_value=1.0,max_value=5.0,value=1.5,step=0.1); bconf=st.number_input("Min Conf",min_value=0.30,max_value=0.95,value=0.55,step=0.01)
         bsp=st.number_input("Spread pts",20.0); btv=st.number_input("Tick Value",1.0); bts=st.number_input("Tick Size",0.01,format="%.4f")
     with bta:
         st.markdown("#### Upload Bar CSV"); st.caption("Columns: "+", ".join(REQ))
