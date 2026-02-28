@@ -315,14 +315,27 @@ with st.sidebar:
     # ── TELEGRAM STATUS
     st.markdown("---")
     st.markdown("### 📱 Telegram")
-    tg_token = st.secrets.get("TG_BOT_TOKEN", "")
-    st.markdown(
-        f'<div class="telegram-box">'
-        f'Status: {"🟢 Connected" if tg_token else "🔴 Not configured"}<br>'
-        f'Add <code>TG_BOT_TOKEN</code> and <code>TG_CHAT_ID</code> to secrets.toml'
-        f'</div>',
-        unsafe_allow_html=True
-    )
+    tg_token  = st.secrets.get("TG_BOT_TOKEN", "")
+    tg_chatid = st.secrets.get("TG_CHAT_ID", "")
+    if tg_token and tg_chatid:
+        st.markdown(
+            f'<div class="telegram-box">'
+            f'Status: 🟢 Connected<br>'
+            f'Chat ID: <code>{tg_chatid}</code>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+    else:
+        missing = []
+        if not tg_token:  missing.append("<code>TG_BOT_TOKEN</code>")
+        if not tg_chatid: missing.append("<code>TG_CHAT_ID</code>")
+        st.markdown(
+            f'<div class="telegram-box">'
+            f'Status: 🔴 Not configured<br>'
+            f'Add {" and ".join(missing)} to secrets.toml'
+            f'</div>',
+            unsafe_allow_html=True
+        )
     if tg_token:
         if st.button("📤 Send Test Message"):
             ok = send_telegram(tg_token, st.secrets.get("TG_CHAT_ID",""),
@@ -357,16 +370,8 @@ def kpi(col, label, value, color_class="metric-val-neu"):
         unsafe_allow_html=True
     )
 
-if not perf_df.empty:
-    latest    = perf_df.iloc[-1]
-    balance   = float(latest.get("balance", 0))
-    equity    = float(latest.get("equity",  0))
-    dd        = float(latest.get("drawdown", 0)) * 100
-    tot       = int(latest.get("total_trades", 0))
-    wins      = int(latest.get("wins", 0))
-    total_pnl = float(latest.get("total_pnl", 0))
-    wr        = (wins / tot * 100) if tot > 0 else 0
-
+def _render_kpis(balance, equity, dd, tot, wins, total_pnl):
+    wr = (wins / tot * 100) if tot > 0 else 0
     kpi(kpi_cols[0], "Balance",   f"${balance:,.2f}")
     kpi(kpi_cols[1], "Equity",    f"${equity:,.2f}")
     kpi(kpi_cols[2], "Drawdown",  f"{dd:.2f}%",
@@ -376,21 +381,48 @@ if not perf_df.empty:
     kpi(kpi_cols[4], "Total PnL", f"${total_pnl:+,.2f}",
         "metric-val-pos" if total_pnl >= 0 else "metric-val-neg")
     kpi(kpi_cols[5], "Trades",    str(tot))
+    return balance, wr
 
-    # Capital budget banner
-    if cfg_data:
-        tcap = float(cfg_data.get("trading_capital", 0))
-        if tcap > 0:
-            cpct = float(cfg_data.get("capital_pct", 100))
-            eff  = tcap * (cpct / 100)
-            st.info(
-                f"💰 **Capital Budget**: ${tcap:,.2f} × {cpct:.0f}% = "
-                f"**Effective ${eff:,.2f}** "
-                f"(Full balance: ${balance:,.2f})"
-            )
+if not perf_df.empty:
+    latest    = perf_df.iloc[-1]
+    balance, wr = _render_kpis(
+        float(latest.get("balance", 0)),
+        float(latest.get("equity",  0)),
+        float(latest.get("drawdown", 0)) * 100,
+        int(latest.get("total_trades", 0)),
+        int(latest.get("wins", 0)),
+        float(latest.get("total_pnl", 0)),
+    )
+
+elif cfg_data and cfg_data.get("live_balance"):
+    # ── Fall back to live snapshot written by EA into ea_config ──────────
+    live_ts = cfg_data.get("live_ts", "")
+    balance, wr = _render_kpis(
+        float(cfg_data.get("live_balance", 0)),
+        float(cfg_data.get("live_equity",  0)),
+        float(cfg_data.get("live_dd_pct",  0)),
+        int(cfg_data.get("live_trades", 0)),
+        int(cfg_data.get("live_wins",   0)),
+        float(cfg_data.get("live_pnl",  0)),
+    )
+    st.caption(f"⚡ Live snapshot from EA · Last update: {live_ts}")
+
 else:
+    balance = 0
     for c in kpi_cols:
         kpi(c, "—", "N/A")
+
+# Capital budget banner
+if cfg_data:
+    tcap = float(cfg_data.get("trading_capital", 0))
+    if tcap > 0:
+        cpct = float(cfg_data.get("capital_pct", 100))
+        eff  = tcap * (cpct / 100)
+        st.info(
+            f"💰 **Capital Budget**: ${tcap:,.2f} × {cpct:.0f}% = "
+            f"**Effective ${eff:,.2f}** "
+            f"(Full balance: ${balance:,.2f})"
+        )
 
 st.markdown("---")
 
