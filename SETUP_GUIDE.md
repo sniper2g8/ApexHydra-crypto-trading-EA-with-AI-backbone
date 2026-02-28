@@ -34,7 +34,105 @@
                                 │  🎛 Remote control ───┼──┘
                                 └───────────────────────┘
 ```
+Your new Modal URL after deploy will be:
+https://YOUR_WORKSPACE--apex-hydracrypto-apex-hydracrypto-predict.modal.run
 
+⚠️ Remember to update Inp_Modal_URL in the MT5 EA inputs and re-add the new URL to MT5's allowed WebRequest list.
+
+
+🤖 How to Deploy the Telegram Bot
+Option A — Run on your VPS (simplest, alongside MT5)
+This is the recommended setup since the bot already shares the VPS with your EA.
+1. Install dependencies
+bashpip install "python-telegram-bot[job-queue]>=20.7" supabase python-dotenv
+2. Create your bot with BotFather
+
+Message @BotFather on Telegram → /newbot → follow prompts
+Copy the token: 123456789:ABCdef...
+
+3. Get your Telegram chat ID
+
+Message @userinfobot on Telegram
+It replies with your numeric ID e.g. 987654321
+
+4. Create a .env file in the same folder as the bot script:
+envTELEGRAM_BOT_TOKEN=123456789:ABCdef...
+TELEGRAM_ALLOWED_IDS=987654321
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_service_role_key
+DD_ALERT_PCT=10.0
+DD_CRITICAL_PCT=18.0
+MONITOR_INTERVAL_S=60
+5. Test it runs
+bashpython apex_hydra_telegram_bot.py
+Then message your bot /start on Telegram.
+6. Run it as a permanent background service
+Create a systemd service so it auto-starts on reboot:
+bashsudo nano /etc/systemd/system/apexhydra-bot.service
+Paste this (adjust paths):
+ini[Unit]
+Description=ApexHydra Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/home/your_user/apexhydra
+ExecStart=/usr/bin/python3 /home/your_user/apexhydra/apex_hydra_telegram_bot.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/your_user/apexhydra/.env
+
+[Install]
+WantedBy=multi-user.target
+Then enable it:
+bashsudo systemctl daemon-reload
+sudo systemctl enable apexhydra-bot
+sudo systemctl start apexhydra-bot
+sudo systemctl status apexhydra-bot   # confirm it's running
+```
+
+---
+
+### Option B — Deploy to Railway (free cloud hosting, zero VPS config)
+
+1. Push your project to a GitHub repo (exclude `.env` — use `.gitignore`)
+2. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub
+3. Select your repo, set the start command to:
+```
+   python apex_hydra_telegram_bot.py
+
+Add environment variables in Railway's dashboard (same keys as .env)
+Railway keeps it running 24/7 on a free tier
+
+
+Option C — Deploy to Fly.io (more robust, free tier)
+bash# Install flyctl
+curl -L https://fly.io/install.sh | sh
+
+# Login
+fly auth login
+
+# In your project folder — create a minimal Dockerfile first:
+cat > Dockerfile << 'EOF'
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install "python-telegram-bot[job-queue]>=20.7" supabase python-dotenv
+COPY apex_hydra_telegram_bot.py .
+CMD ["python", "apex_hydra_telegram_bot.py"]
+EOF
+
+# Launch app (follow prompts, pick the free plan)
+fly launch
+
+# Set secrets (instead of .env file)
+fly secrets set TELEGRAM_BOT_TOKEN="..." TELEGRAM_ALLOWED_IDS="..." SUPABASE_URL="..." SUPABASE_KEY="..."
+
+# Deploy
+fly deploy
+
+Recommendation: For your setup, Option A (VPS systemd service) is simplest — the bot, MT5 EA, and Streamlit dashboard all live on the same machine with no extra cloud cost.
 ---
 
 ## STEP 1 — SUPABASE SETUP (5 min)
@@ -58,10 +156,10 @@ pip install modal
 modal token new    # Opens browser → log in
 
 # Test locally first
-modal run apex-hydracrypto.py
+modal run apex_hydracrypto_modal.py
 
 # Deploy to cloud (gets a permanent HTTPS URL)
-modal deploy apex-hydracrypto.py
+modal deploy apex_hydracrypto_modal.py
 ```
 
 After deploy, Modal prints your endpoint URL:
