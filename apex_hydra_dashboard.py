@@ -1,7 +1,8 @@
 """
 ╔══════════════════════════════════════════════════════════════════════╗
-║        ApexHydra Crypto v4.0 — Streamlit Dashboard                  ║
-║  Live monitoring + Remote control + Capital Allocation + Telegram    ║
+║        ApexHydra Crypto v4.1 — Streamlit Dashboard                  ║
+║  Live monitoring + Remote control + Capital Allocation + Telegram   ║
+║  NEW: Backtest tab | ML model status | News Filter status            ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """
 
@@ -253,6 +254,46 @@ with st.sidebar:
             st.success(f"Capital set: ${cap_val:,.2f} ({cap_pct}%)")
             st.rerun()
 
+    st.markdown("---")
+    # ── MODAL AI + ML MODEL STATUS ──────────────────────────────────
+    st.markdown("### 🤖 Modal AI")
+    modal_url = st.secrets.get("MODAL_URL", "")
+    if modal_url:
+        try:
+            r = requests.get(f"{modal_url.rstrip('/')}/apex-hydracrypto-health", timeout=5)
+            if r.status_code == 200:
+                h = r.json()
+                ml = h.get("ml_model", {})
+                st.markdown(
+                    f'<div class="capital-box">'
+                    f'🟢 Modal OK — v{h.get("version","?")}<br>'
+                    f'ML Model: {"✅ Loaded" if ml.get("loaded") else "⚠️ Not trained yet"}'
+                    + (f'<br>Accuracy: <b>{ml["accuracy"]:.1%}</b> | Samples: {ml["samples"]}' if ml.get("accuracy") else "")
+                    + f'<br>News filter: ✅ enabled</div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown('<div class="capital-box">🟡 Modal: returned non-200</div>', unsafe_allow_html=True)
+        except Exception:
+            st.markdown('<div class="capital-box">🔴 Modal: unreachable</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div class="capital-box">Add <code>MODAL_URL</code> to secrets.toml to see ML status</div>',
+            unsafe_allow_html=True
+        )
+
+    # ── NEWS FILTER STATUS ───────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📰 News Filter")
+    news_mins = st.number_input("Block N minutes around events", min_value=5, max_value=60, value=15, step=5,
+                                 help="MT5 EA uses this value as news_buffer_minutes in each request")
+    st.caption("Set `Inp_News_Buffer_Min` in EA inputs to match. EA must also enable `Inp_News_Filter = true`.")
+    st.markdown(
+        '<div class="capital-box">📡 EA sends <code>news_minutes_away</code> to Modal.<br>'
+        'Modal auto-blocks if event is within the buffer window.</div>',
+        unsafe_allow_html=True
+    )
+
     # ── RISK SETTINGS
     st.markdown("---")
     st.markdown("### ⚙️ Risk Settings")
@@ -354,9 +395,9 @@ st.markdown("---")
 # ──────────────────────────────────────────────────────────────────────
 #  TABS
 # ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📈 Equity Curve", "🎯 Regime Map", "🤖 AI Performance",
-    "📋 Trade History", "📡 Live Feed", "📱 Telegram",
+    "📋 Trade History", "📡 Live Feed", "📱 Telegram", "🧪 Backtest",
 ])
 
 # ── TAB 1: EQUITY CURVE
@@ -610,6 +651,171 @@ TG_CHAT_ID   = "123456789"          # or "-100xxxxxxx" for groups
         "ALTER TABLE ea_config ADD COLUMN IF NOT EXISTS trading_capital DECIMAL(16,2) DEFAULT 0;\n"
         "ALTER TABLE ea_config ADD COLUMN IF NOT EXISTS capital_pct INTEGER DEFAULT 100;\n```"
     )
+
+
+# ── TAB 7: BACKTEST (NEW) ─────────────────────────────────────────────
+with tab7:
+    st.subheader("🧪 Strategy Backtester")
+    st.markdown(
+        "Upload a CSV of historical bars with pre-computed indicators and run the "
+        "ApexHydra strategy on them. The same logic used live is applied here."
+    )
+
+    MODAL_URL = st.secrets.get("MODAL_URL", "")
+
+    col_bt1, col_bt2 = st.columns([2, 1])
+    with col_bt2:
+        st.markdown("#### Settings")
+        bt_symbol    = st.text_input("Symbol",         value="BTCUSD")
+        bt_tf        = st.text_input("Timeframe",      value="H1")
+        bt_balance   = st.number_input("Initial Balance ($)", value=10000.0, step=500.0)
+        bt_risk      = st.number_input("Risk % per trade",    value=1.0, min_value=0.1, max_value=10.0, step=0.1)
+        bt_min_rr    = st.number_input("Min R:R",             value=1.5, min_value=1.0, max_value=5.0,  step=0.1)
+        bt_min_conf  = st.number_input("Min Confidence",      value=0.52, min_value=0.30, max_value=0.95, step=0.01)
+        bt_spread    = st.number_input("Spread (points)",     value=20.0, min_value=0.0, max_value=500.0)
+        bt_tick_val  = st.number_input("Tick Value",          value=1.0,  step=0.1)
+        bt_tick_size = st.number_input("Tick Size",           value=0.01, step=0.01, format="%.4f")
+
+    with col_bt1:
+        st.markdown("#### Upload Bar Data (CSV)")
+        st.markdown(
+            "**Required columns**: `timestamp, open, high, low, close, volume, "
+            "atr, atr_avg, adx, plus_di, minus_di, rsi, macd, macd_signal, macd_hist, "
+            "ema20, ema50, ema200, htf_ema50, htf_ema200`"
+        )
+        st.caption("Export from MT5 using the companion MQL5 script (see repo). Minimum 250 rows recommended.")
+
+        uploaded = st.file_uploader("Upload CSV", type=["csv"], key="backtest_csv")
+
+        if uploaded and MODAL_URL:
+            try:
+                df_bt = pd.read_csv(uploaded)
+                st.success(f"Loaded {len(df_bt)} rows. Preview:")
+                st.dataframe(df_bt.head(5), use_container_width=True, hide_index=True)
+
+                REQUIRED = ["timestamp","open","high","low","close","volume","atr","atr_avg",
+                            "adx","plus_di","minus_di","rsi","macd","macd_signal","macd_hist",
+                            "ema20","ema50","ema200","htf_ema50","htf_ema200"]
+                missing = [c for c in REQUIRED if c not in df_bt.columns]
+                if missing:
+                    st.error(f"Missing columns: {missing}")
+                else:
+                    if st.button("▶ Run Backtest", type="primary"):
+                        with st.spinner("Running backtest on Modal…"):
+                            bars_payload = df_bt[REQUIRED].fillna(0).to_dict(orient="records")
+                            payload = {
+                                "symbol":          bt_symbol,
+                                "timeframe":       bt_tf,
+                                "bars":            bars_payload,
+                                "initial_balance": bt_balance,
+                                "risk_pct":        bt_risk,
+                                "min_rr":          bt_min_rr,
+                                "min_confidence":  bt_min_conf,
+                                "spread_points":   bt_spread,
+                                "tick_value":      bt_tick_val,
+                                "tick_size":       bt_tick_size,
+                                "min_lot":         0.01,
+                                "max_lot":         100.0,
+                                "lot_step":        0.01,
+                                "point":           bt_tick_size,
+                                "digits":          2,
+                            }
+                            r = requests.post(
+                                f"{MODAL_URL.rstrip('/')}/apex-hydracrypto-backtest",
+                                json=payload, timeout=120
+                            )
+                            if r.status_code == 200:
+                                res = r.json()
+                                st.session_state["bt_result"] = res
+                            else:
+                                st.error(f"Backtest failed: {r.status_code} — {r.text[:300]}")
+            except Exception as e:
+                st.error(f"Error: {e}")
+        elif uploaded and not MODAL_URL:
+            st.warning("Add `MODAL_URL` to secrets.toml to run backtest via Modal.")
+        elif not uploaded:
+            st.info("Upload a CSV to begin. You can export bar data from MT5 using the companion script in the repo.")
+
+    # ── Backtest Results ──────────────────────────────────────────────
+    if "bt_result" in st.session_state:
+        res = st.session_state["bt_result"]
+        st.markdown("---")
+        st.markdown("### 📊 Backtest Results")
+
+        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+        def bt_kpi(col, label, val, good=None):
+            color = "#58a6ff"
+            if good is not None:
+                color = "#2dba4e" if good else "#f85149"
+            col.markdown(
+                f'<div class="metric-card"><div style="font-size:0.65rem;color:#8b949e;">{label}</div>'
+                f'<div style="color:{color};font-size:1.2rem;font-weight:700;">{val}</div></div>',
+                unsafe_allow_html=True
+            )
+
+        bt_kpi(m1, "Trades",     res["total_trades"])
+        bt_kpi(m2, "Win Rate",   f"{res['win_rate']*100:.1f}%",        good=res['win_rate'] >= 0.5)
+        bt_kpi(m3, "Total PnL",  f"${res['total_pnl']:+,.2f}",         good=res['total_pnl'] >= 0)
+        bt_kpi(m4, "Max DD",     f"{res['max_drawdown_pct']:.1f}%",    good=res['max_drawdown_pct'] <= 15)
+        bt_kpi(m5, "Sharpe",     f"{res['sharpe_ratio']:.2f}",         good=res['sharpe_ratio'] >= 1.0)
+        bt_kpi(m6, "Prof.Factor",f"{res['profit_factor']:.2f}",        good=res['profit_factor'] >= 1.5)
+        bt_kpi(m7, "Final Bal.", f"${res['final_balance']:,.2f}")
+
+        # Equity curve
+        if res.get("equity_curve"):
+            fig_eq = go.Figure(go.Scatter(
+                y=res["equity_curve"], mode="lines",
+                line=dict(color="#58a6ff", width=2),
+                fill="tozeroy", fillcolor="rgba(88,166,255,0.07)",
+                name="Balance",
+            ))
+            fig_eq.add_hline(y=res.get("initial_balance", res["equity_curve"][0]),
+                             line_dash="dot", line_color="#8b949e",
+                             annotation_text="Starting balance")
+            fig_eq.update_layout(
+                template="plotly_dark", paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+                title="Equity Curve (Backtest)", height=320, margin=dict(l=0,r=0,t=40,b=0),
+            )
+            st.plotly_chart(fig_eq, use_container_width=True)
+
+        rc1, rc2 = st.columns(2)
+        # Regime breakdown
+        with rc1:
+            if res.get("regime_breakdown"):
+                st.markdown("**Performance by Regime**")
+                rd = pd.DataFrame(res["regime_breakdown"]).T.reset_index()
+                rd.columns = ["Regime","Trades","Wins","Win Rate %","Total PnL"]
+                fig_r = px.bar(rd, x="Regime", y="Win Rate %", color="Win Rate %",
+                               color_continuous_scale="RdYlGn", text="Win Rate %",
+                               title="Win Rate by Regime (Backtest)")
+                fig_r.update_layout(template="plotly_dark", paper_bgcolor="#0d1117",
+                                    plot_bgcolor="#161b22", height=280,
+                                    margin=dict(l=0,r=0,t=40,b=0), coloraxis_showscale=False)
+                st.plotly_chart(fig_r, use_container_width=True)
+
+        # PnL histogram
+        with rc2:
+            if res.get("trades"):
+                trades_bt = pd.DataFrame([t for t in res["trades"]])
+                fig_h = px.histogram(trades_bt, x="pnl", nbins=25,
+                                     color_discrete_sequence=["#a371f7"],
+                                     title="PnL Distribution (Backtest)")
+                fig_h.add_vline(x=0, line_dash="dash", line_color="#f85149")
+                fig_h.update_layout(template="plotly_dark", paper_bgcolor="#0d1117",
+                                    plot_bgcolor="#161b22", height=280,
+                                    margin=dict(l=0,r=0,t=40,b=0))
+                st.plotly_chart(fig_h, use_container_width=True)
+
+        # Trade list
+        if res.get("trades"):
+            st.markdown("**Trade Log**")
+            bt_df = pd.DataFrame(res["trades"])
+            st.dataframe(bt_df, use_container_width=True, hide_index=True)
+
+            # Download
+            csv_out = bt_df.to_csv(index=False)
+            st.download_button("📥 Download Trade Log (CSV)", csv_out,
+                               file_name=f"backtest_{bt_symbol}_{bt_tf}.csv", mime="text/csv")
 
 # ── AUTO-REFRESH
 if auto_refresh:
