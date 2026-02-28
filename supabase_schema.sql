@@ -73,7 +73,9 @@ CREATE INDEX idx_events_ts ON events(timestamp DESC);
 -- ══════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS ea_config (
     id              UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    magic           INTEGER DEFAULT 20250228,
+    magic           INTEGER DEFAULT 20250228 UNIQUE,
+    -- Capital allocation (EA risks only this amount, not full balance)
+    allocated_capital DECIMAL(16,2) DEFAULT 0.0,  -- 0 = use full account balance
     -- Risk parameters (Streamlit can update these)
     risk_pct        DECIMAL(5,2) DEFAULT 1.0,
     max_dd_pct      DECIMAL(5,2) DEFAULT 20.0,
@@ -88,9 +90,9 @@ CREATE TABLE IF NOT EXISTS ea_config (
 );
 
 -- Insert default config row
-INSERT INTO ea_config (magic, risk_pct, max_dd_pct, max_positions, min_confidence, halted, paused)
-VALUES (20250228, 1.0, 20.0, 3, 0.55, false, false)
-ON CONFLICT DO NOTHING;
+INSERT INTO ea_config (magic, allocated_capital, risk_pct, max_dd_pct, max_positions, min_confidence, halted, paused)
+VALUES (20250228, 0.0, 1.0, 20.0, 3, 0.55, false, false)
+ON CONFLICT (magic) DO NOTHING;
 
 -- Auto-update timestamp
 CREATE OR REPLACE FUNCTION update_ea_config_ts()

@@ -63,6 +63,7 @@ class AIRequest(BaseModel):
     # Account context
     account_balance:  float
     account_equity:   float
+    allocated_capital: float = 0.0   # 0 = use full balance; >0 = cap sizing to this amount
     risk_pct:         float = 1.0
     max_positions:    int   = 3
     open_positions:   int   = 0
@@ -440,7 +441,6 @@ def _regime_filter(regime_id: int, p: AIRequest, raw_score: float) -> int:
     if regime_id == 3:   # High Vol — require strong conviction
         return (1 if raw_score > 0 else -1) if abs(raw_score) >= 0.40 else 0
     if regime_id == 4:   # Breakout — follow breakout direction
-        brk = float(0)
         c, h, l = p.bars.close, p.bars.high, p.bars.low
         hh50 = max(h[1:min(51, len(h))]) if len(h) > 1 else c[0]
         ll50 = min(l[1:min(51, len(l))]) if len(l) > 1 else c[0]
@@ -511,7 +511,9 @@ def compute_position(p: AIRequest, signal: int, confidence: float,
 
     # Cap Kelly at user-specified risk %
     effective_risk_pct = min(kelly * 100, p.risk_pct)
-    risk_amount  = p.account_balance * (effective_risk_pct / 100.0)
+    # Use allocated_capital if set, otherwise full balance
+    sizing_base  = p.allocated_capital if p.allocated_capital > 0 else p.account_balance
+    risk_amount  = sizing_base * (effective_risk_pct / 100.0)
 
     tick_value   = p.tick_value
     tick_size    = p.tick_size
@@ -543,7 +545,7 @@ def _normalize_lots(lots: float, p: AIRequest) -> float:
     memory=512,
     cpu=1.0,
     # Keep 1 warm container — eliminates cold start latency
-    min_containers=1,
+    keep_warm=1,
     max_containers=5,
 )
 @modal.fastapi_endpoint(method="POST", label="apexhydra-predict")
