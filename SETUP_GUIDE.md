@@ -58,10 +58,10 @@ pip install modal
 modal token new    # Opens browser → log in
 
 # Test locally first
-modal run apex_hydra_modal.py
+modal run apex-hydracrypto.py
 
 # Deploy to cloud (gets a permanent HTTPS URL)
-modal deploy apex_hydra_modal.py
+modal deploy apex-hydracrypto.py
 ```
 
 After deploy, Modal prints your endpoint URL:
