@@ -13,11 +13,11 @@
 ║  │                  ATR SL/TP                               │       ║
 ║  └──────────────────────────────────────────────────────────┘       ║
 ║                                                                      ║
-║  Scheduled tasks:                                                    ║
-║    news_monitor    — every 5 min  (ForexFactory + Finnhub)          ║
-║    forward_tester  — every 4 hrs  (paper-trades all symbols)        ║
-║    online_learner  — every 6 hrs  (fine-tunes PPO from trade log)   ║
-║    weekly_backtest — every Sunday (full 2-year backtest)            ║
+║  Scheduled tasks (1 cron job slot — free plan friendly):           ║
+║    unified_scheduler — every 5 min, internally dispatches:         ║
+║      • news_monitor   every 5 min  (ForexFactory + Finnhub)        ║
+║      • forward_tester every 4 hrs  (paper-trades all symbols)      ║
+║      • online_learner every 6 hrs  (fine-tunes PPO models)         ║
 ║                                                                      ║
 ║  API Endpoints:                                                      ║
 ║    POST /predict     — main signal (called by MT5 every scan)       ║
@@ -1376,16 +1376,24 @@ async def health():
 
 # ──────────────────────────────────────────────────────────────────────
 #  SECTION 9 — SCHEDULED BACKGROUND TASKS
+#
+#  ONE cron job (every 5 min) replaces three separate cron decorators.
+#  Modal free plan allows 5 cron jobs total. Using 1 here preserves
+#  4 slots for other apps in your workspace.
+#
+#  Dispatch schedule (controlled by state file in volume):
+#    Every 5 min  → _run_news_monitor()
+#    Every 4 hrs  → _run_forward_tester()
+#    Every 6 hrs  → _run_online_learner()
 # ──────────────────────────────────────────────────────────────────────
 
-# ── A) News Monitor (every 5 min) ─────────────────────────────────────
+SCHEDULER_STATE_PATH = f"{MODEL_DIR}/scheduler_state.json"
 
 SHOCK_KEYWORDS = [
     "emergency rate cut", "emergency rate hike", "unscheduled fed meeting",
     "bank failure", "bank collapse", "bank run on", "systemic banking crisis",
     "stock market circuit breaker", "us treasury default", "us debt default",
     "war declared", "nuclear strike", "financial system collapse",
-    # Crypto-specific shocks
     "exchange hack", "exchange collapse", "exchange insolvency",
     "stablecoin depeg", "tether depegged", "usdc depegged",
     "btc etf halted", "crypto market halt", "sec crypto ban",
@@ -1401,16 +1409,42 @@ CRYPTO_RELEVANCE_TERMS = [
     "dollar", "currency", "exchange rate",
 ]
 
-@app.function(
-    image=image, secrets=[secrets],
-    schedule=modal.Period(minutes=5), timeout=120,
-)
-def news_monitor():
-    """
-    Runs every 5 minutes. Fetches from ForexFactory + Finnhub.
-    Writes active blackouts to Supabase news_blackouts table.
-    The /predict endpoint reads from DB — no external calls in hot path.
-    """
+
+def _load_scheduler_state() -> dict:
+    """Read last-run timestamps from volume. Returns empty dict on first run."""
+    try:
+        if os.path.exists(SCHEDULER_STATE_PATH):
+            with open(SCHEDULER_STATE_PATH) as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"[SCHED] State read failed: {e}")
+    return {}
+
+
+def _save_scheduler_state(state: dict):
+    try:
+        with open(SCHEDULER_STATE_PATH, "w") as f:
+            json.dump(state, f)
+        volume.commit()
+    except Exception as e:
+        print(f"[SCHED] State write failed: {e}")
+
+
+def _due(state: dict, key: str, interval_hours: float) -> bool:
+    """Return True if the task hasn't run in the last interval_hours."""
+    last = state.get(key)
+    if last is None:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+        return (datetime.now(timezone.utc) - last_dt).total_seconds() >= interval_hours * 3600
+    except:
+        return True
+
+
+# ── Sub-task A: News Monitor ──────────────────────────────────────────
+
+def _run_news_monitor():
     import requests
     from supabase import create_client
 
@@ -1418,7 +1452,7 @@ def news_monitor():
     now = datetime.now(timezone.utc)
     active_blackouts = []
 
-    # Source 1: ForexFactory — scheduled economic calendar
+    # Source 1: ForexFactory economic calendar
     try:
         r = requests.get(
             "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
@@ -1436,9 +1470,9 @@ def news_monitor():
             window_min = 30 if impact == "high" else 10
             window = timedelta(minutes=window_min)
             if abs(evt_time - now) <= window:
-                currency = evt.get("currency","").strip().upper()
+                currency = evt.get("currency", "").strip().upper()
                 active_blackouts.append({
-                    "source": "ForexFactory", "title": evt.get("title","Event")[:120],
+                    "source": "ForexFactory", "title": evt.get("title", "Event")[:120],
                     "currencies": currency, "impact": impact.capitalize(),
                     "event_time": evt_time.isoformat(),
                     "expires_at": (evt_time + window).isoformat(),
@@ -1448,7 +1482,7 @@ def news_monitor():
     except Exception as e:
         print(f"[NEWS] ForexFactory failed: {e}")
 
-    # Source 2: Finnhub — breaking news (crypto + macro shocks)
+    # Source 2: Finnhub crypto + macro shocks
     finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
     if finnhub_key:
         try:
@@ -1458,14 +1492,14 @@ def news_monitor():
             )
             r.raise_for_status()
             for art in r.json()[:20]:
-                headline = (art.get("headline","") + " " + art.get("summary","")).lower()
-                pub_time = datetime.fromtimestamp(art.get("datetime",0), tz=timezone.utc)
+                headline = (art.get("headline", "") + " " + art.get("summary", "")).lower()
+                pub_time = datetime.fromtimestamp(art.get("datetime", 0), tz=timezone.utc)
                 if (now - pub_time).total_seconds() > 7200: continue
                 shock_hit  = any(kw in headline for kw in SHOCK_KEYWORDS)
                 crypto_rel = any(t in headline for t in CRYPTO_RELEVANCE_TERMS)
                 if shock_hit and crypto_rel:
                     active_blackouts.append({
-                        "source": "Finnhub", "title": art.get("headline","Breaking")[:120],
+                        "source": "Finnhub", "title": art.get("headline", "Breaking")[:120],
                         "currencies": "ALL", "impact": "SHOCK",
                         "event_time": pub_time.isoformat(),
                         "expires_at": (now + timedelta(minutes=60)).isoformat(),
@@ -1475,32 +1509,20 @@ def news_monitor():
         except Exception as e:
             print(f"[NEWS] Finnhub failed: {e}")
 
-    # Write to Supabase
-    if active_blackouts:
-        try:
-            sb.table("news_blackouts").delete().eq("active", True).execute()
+    try:
+        sb.table("news_blackouts").delete().eq("active", True).execute()
+        if active_blackouts:
             sb.table("news_blackouts").insert(active_blackouts).execute()
             print(f"[NEWS] {len(active_blackouts)} blackouts written")
-        except Exception as e:
-            print(f"[NEWS] DB write failed: {e}")
-    else:
-        try:
-            sb.table("news_blackouts").delete().eq("active", True).execute()
-        except: pass
-        print("[NEWS] No active blackouts")
+        else:
+            print("[NEWS] No active blackouts")
+    except Exception as e:
+        print(f"[NEWS] DB write failed: {e}")
 
 
-# ── B) Online Learner (every 6 hours) ────────────────────────────────
+# ── Sub-task B: Online Learner ────────────────────────────────────────
 
-@app.function(
-    image=image, volumes={MODEL_DIR: volume}, secrets=[secrets],
-    schedule=modal.Period(hours=6), timeout=600, memory=2048,
-)
-def online_learner():
-    """
-    Reads closed trades from Supabase, generates training episodes,
-    fine-tunes each PPO strategy model with recent outcomes.
-    """
+def _run_online_learner():
     from supabase import create_client
     sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
 
@@ -1514,40 +1536,27 @@ def online_learner():
         print(f"[LEARNER] DB read failed: {e}"); return
 
     if len(rows) < 20:
-        print(f"[LEARNER] Only {len(rows)} trades — need 20+. Skipping."); return
+        print(f"[LEARNER] Only {len(rows)} closed trades — need 20+, skipping"); return
 
-    # Group by strategy and fine-tune
     for strategy in STRATEGY_NAMES:
-        strategy_rows = [r for r in rows if r.get("strategy_used") == strategy or
-                         r.get("regime","").lower() in ["trending","ranging","volatile"]]
+        strategy_rows = [r for r in rows if r.get("strategy_used") == strategy]
         if len(strategy_rows) < 10:
             print(f"[LEARNER] {strategy}: {len(strategy_rows)} samples — skip")
             continue
         try:
             model = load_strategy_model(strategy)
-            # Fine-tune with 2000 timesteps on each cycle
             model.learn(total_timesteps=2000, reset_num_timesteps=False)
             save_strategy_model(model, strategy)
-            wins = sum(1 for r in strategy_rows if float(r.get("pnl",0) or 0) > 0)
+            wins = sum(1 for r in strategy_rows if float(r.get("pnl", 0) or 0) > 0)
             print(f"[LEARNER] {strategy}: fine-tuned on {len(strategy_rows)} trades "
                   f"(WR={wins/len(strategy_rows):.1%})")
         except Exception as e:
             print(f"[LEARNER] {strategy} failed: {e}")
 
 
-# ── C) Forward Tester (every 4 hours) ────────────────────────────────
+# ── Sub-task C: Forward Tester ────────────────────────────────────────
 
-@app.function(
-    image=image, volumes={MODEL_DIR: volume}, secrets=[secrets],
-    schedule=modal.Period(hours=4), timeout=300, memory=1024,
-)
-def forward_tester():
-    """
-    Paper-trades each strategy on recent Yahoo Finance crypto data.
-    Logs performance to Supabase forward_test table.
-    Promotes the best recent performer (not yet implemented as hard swap,
-    but writes metrics for the dashboard to show strategy comparison).
-    """
+def _run_forward_tester():
     import requests
     from supabase import create_client
 
@@ -1555,8 +1564,8 @@ def forward_tester():
     now = datetime.now(timezone.utc)
 
     CRYPTO_YF = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD"]
+    results   = []
 
-    results = []
     for ticker in CRYPTO_YF:
         try:
             r = requests.get(
@@ -1566,53 +1575,48 @@ def forward_tester():
             )
             r.raise_for_status()
             data   = r.json()["chart"]["result"][0]
-            closes = data["indicators"]["quote"][0]["close"]
-            closes = [x for x in closes if x is not None]
-
+            closes = [x for x in data["indicators"]["quote"][0]["close"] if x is not None]
             if len(closes) < 50: continue
 
-            # Quick forward test: run strategy signals on rolling windows
             for strategy in STRATEGY_NAMES:
-                fn     = STRATEGY_FN[strategy]
-                wins   = 0; losses = 0; skips = 0
+                fn = STRATEGY_FN[strategy]
+                wins = losses = 0
                 for i in range(50, len(closes)):
                     window = closes[i-50:i]
-                    # Minimal AIRequest for rule-based signal
                     fake = AIRequest(
-                        symbol=ticker.replace("-",""), timeframe="H1",
+                        symbol=ticker.replace("-", ""), timeframe="H1",
                         magic=0, timestamp=now.isoformat(),
                         account_balance=10000, account_equity=10000,
                         risk_pct=1.0, max_positions=3, open_positions=0,
-                        bars=BarData(open=window[::-1], high=[c*1.002 for c in window[::-1]],
-                                     low=[c*0.998 for c in window[::-1]], close=window[::-1],
-                                     volume=[100.0]*len(window)),
+                        bars=BarData(
+                            open=window[::-1], high=[c*1.002 for c in window[::-1]],
+                            low=[c*0.998 for c in window[::-1]], close=window[::-1],
+                            volume=[100.0]*len(window),
+                        ),
                         atr=abs(window[-1]-window[-2])*2,
                         atr_avg=abs(window[-1]-window[-20])/20,
                         adx=25.0, plus_di=15.0, minus_di=12.0,
                         rsi=_rsi(window), macd=0, macd_signal=0, macd_hist=0,
-                        ema20=_ema(window,20), ema50=_ema(window,50) if len(window)>=50 else window[-1],
+                        ema20=_ema(window, 20),
+                        ema50=_ema(window, 50) if len(window) >= 50 else window[-1],
                         ema200=window[-1], htf_ema50=window[-1], htf_ema200=window[-1],
                         tick_value=1.0, tick_size=0.01, min_lot=0.01,
                         max_lot=100, lot_step=0.01, point=0.01, digits=2,
                     )
-                    direction, conf, _ = fn(fake)
-                    if direction == "NONE": skips += 1; continue
-                    # Simulate next bar outcome
-                    if i+1 < len(closes):
+                    direction, _, _ = fn(fake)
+                    if direction == "NONE": continue
+                    if i + 1 < len(closes):
                         ret = (closes[i+1] - closes[i]) / closes[i]
                         won = (direction == "BUY" and ret > 0) or (direction == "SELL" and ret < 0)
                         if won: wins += 1
                         else:   losses += 1
 
                 total = wins + losses
-                wr    = wins / total if total > 0 else 0
+                wr    = wins / total if total > 0 else 0.0
                 results.append({
-                    "ticker":   ticker,
-                    "strategy": strategy,
-                    "trades":   total,
-                    "wins":     wins,
-                    "win_rate": round(wr, 4),
-                    "tested_at": now.isoformat(),
+                    "ticker": ticker, "strategy": strategy,
+                    "trades": total, "wins": wins,
+                    "win_rate": round(wr, 4), "tested_at": now.isoformat(),
                 })
                 print(f"[FWD] {ticker} {strategy}: {total} trades WR={wr:.1%}")
         except Exception as e:
@@ -1624,6 +1628,63 @@ def forward_tester():
             print(f"[FWD] {len(results)} results saved")
         except Exception as e:
             print(f"[FWD] DB write failed: {e}")
+
+
+# ── UNIFIED CRON — 1 job slot instead of 3 ───────────────────────────
+
+@app.function(
+    image=image,
+    volumes={MODEL_DIR: volume},
+    secrets=[secrets],
+    schedule=modal.Period(minutes=5),
+    timeout=700,    # enough headroom for learner (longest task)
+    memory=2048,
+)
+def unified_scheduler():
+    """
+    Single cron job that runs every 5 minutes and internally dispatches
+    each sub-task based on how long ago it last ran (stored in volume).
+
+    Schedule:
+      news_monitor    → every  5 min  (always runs)
+      forward_tester  → every  4 hrs
+      online_learner  → every  6 hrs
+
+    Using 1 cron slot instead of 3 keeps the deployment within Modal's
+    free-plan limit of 5 total cron jobs across all apps.
+    """
+    state = _load_scheduler_state()
+    now   = datetime.now(timezone.utc).isoformat()
+    ran   = []
+
+    # News monitor — runs every invocation (5 min cadence)
+    try:
+        _run_news_monitor()
+        state["news_monitor"] = now
+        ran.append("news_monitor")
+    except Exception as e:
+        print(f"[SCHED] news_monitor error: {e}")
+
+    # Forward tester — every 4 hours
+    if _due(state, "forward_tester", 4):
+        try:
+            _run_forward_tester()
+            state["forward_tester"] = now
+            ran.append("forward_tester")
+        except Exception as e:
+            print(f"[SCHED] forward_tester error: {e}")
+
+    # Online learner — every 6 hours (heaviest task, runs last)
+    if _due(state, "online_learner", 6):
+        try:
+            _run_online_learner()
+            state["online_learner"] = now
+            ran.append("online_learner")
+        except Exception as e:
+            print(f"[SCHED] online_learner error: {e}")
+
+    _save_scheduler_state(state)
+    print(f"[SCHED] Done. Ran: {ran or ['news_monitor only']}")
 
 
 # ──────────────────────────────────────────────────────────────────────
