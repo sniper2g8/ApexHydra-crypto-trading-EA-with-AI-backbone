@@ -793,14 +793,10 @@ void DBSyncPerformance(bool final_snap) {
    // PATCH to ea_config so Streamlit + Telegram read it immediately
    if(!Inp_DB_Enable) return;
    string url     = Inp_DB_URL + "/rest/v1/ea_config?magic=eq." + IntegerToString(Inp_Magic);
-   string headers = "Content-Type: application/json
-"
-                  + "apikey: "         + Inp_DB_Key + "
-"
-                  + "Authorization: Bearer " + Inp_DB_Key + "
-"
-                  + "Prefer: return=minimal
-";
+   string headers = "Content-Type: application/json\r\n"
+                  + "apikey: "         + Inp_DB_Key + "\r\n"
+                  + "Authorization: Bearer " + Inp_DB_Key + "\r\n"
+                  + "Prefer: return=minimal\r\n";
    char req[], res[];
    StringToCharArray(patch, req, 0, StringLen(patch));
    string res_hdr;
