@@ -204,31 +204,31 @@ def restricted_callback(func):
 @restricted
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = (
-        "⚡ *ApexHydra Crypto Bot* v4.0\n\n"
-        "📊 *Monitoring Commands:*\n"
+        "⚡ <b>ApexHydra Crypto Bot</b> v4.0\n\n"
+        "📊 <b>Monitoring Commands:</b>\n"
         "/status — EA status + account summary\n"
         "/perf — Performance metrics\n"
         "/trades — Last 10 trades\n"
         "/regimes — Current market regimes\n"
-        "/summary — Per-symbol P\\&L summary\n"
+        "/summary — Per-symbol P&amp;L summary\n"
         "/events — Recent event log\n\n"
-        "🎛 *Control Commands:*\n"
+        "🎛 <b>Control Commands:</b>\n"
         "/resume — Resume EA trading\n"
         "/pause — Pause EA (no new trades)\n"
         "/stop — ⚠️ Emergency halt\n"
         "/config — View current settings\n"
-        "/setcapital \\<amount\\> — Set allocated capital\n"
-        "/setrisk \\<pct\\> — Set risk % per trade\n"
-        "/setconf \\<0.40-0.90\\> — Set min AI confidence\n"
-        "/setmaxdd \\<pct\\> — Set max drawdown % halt\n"
-        "/setmaxpos \\<n\\> — Set max simultaneous positions\n\n"
-        "🔔 *Alerts:*\n"
-        f"Drawdown alert: >{DD_ALERT_PCT}%\n"
-        f"Drawdown critical: >{DD_CRITICAL_PCT}%\n"
+        "/setcapital &lt;amount&gt; — Set allocated capital\n"
+        "/setrisk &lt;pct&gt; — Set risk % per trade\n"
+        "/setconf &lt;0.40-0.90&gt; — Set min AI confidence\n"
+        "/setmaxdd &lt;pct&gt; — Set max drawdown % halt\n"
+        "/setmaxpos &lt;n&gt; — Set max simultaneous positions\n\n"
+        "🔔 <b>Alerts:</b>\n"
+        f"Drawdown alert: &gt;{DD_ALERT_PCT}%\n"
+        f"Drawdown critical: &gt;{DD_CRITICAL_PCT}%\n"
         f"Monitor interval: every {MONITOR_INTERVAL_S}s\n\n"
         "Use /help for detailed descriptions."
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 @restricted
@@ -267,27 +267,27 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ])
 
     text = (
-        f"*⚡ ApexHydra Status*\n"
+        f"<b>⚡ ApexHydra Status</b>\n"
         f"{'─'*28}\n"
-        f"*Status:* {status_icon}\n"
-        f"*Config sync:* {updated_at[:16] if isinstance(updated_at, str) else 'N/A'}\n\n"
-        f"*💰 Account*\n"
-        f"Balance:  `${balance:,.2f}`\n"
-        f"Equity:   `${equity:,.2f}`  ({equity-balance:+.2f})\n"
-        f"Total P\\&L: `{fmt_pnl(tot_pnl)}`\n"
-        f"Drawdown: `{dd:.1f}%`{'  ⚠️' if dd > DD_ALERT_PCT else ''}\n\n"
-        f"*📊 Performance*\n"
-        f"Trades: `{tot_trades}` (W:{wins} / L:{losses})\n"
-        f"Win Rate: `{wr:.1f}%`\n\n"
-        f"*⚙️ Settings*\n"
-        f"Risk/trade:   `{config.get('risk_pct', '?')}%`\n"
-        f"Max DD:       `{config.get('max_dd_pct', '?')}%`\n"
-        f"Max Pos:      `{config.get('max_positions', '?')}`\n"
-        f"Min Conf:     `{float(config.get('min_confidence', 0))*100:.0f}%`\n"
-        f"Capital:      `{'$'+f'{alloc:,.0f}' if alloc > 0 else 'Full balance'}`\n"
+        f"<b>Status:</b> {status_icon}\n"
+        f"<b>Config sync:</b> {updated_at[:16] if isinstance(updated_at, str) else 'N/A'}\n\n"
+        f"<b>💰 Account</b>\n"
+        f"Balance:  <code>${balance:,.2f}</code>\n"
+        f"Equity:   <code>${equity:,.2f}</code>  ({equity-balance:+.2f})\n"
+        f"Total P&amp;L: <code>{fmt_pnl(tot_pnl)}</code>\n"
+        f"Drawdown: <code>{dd:.1f}%</code>{'  ⚠️' if dd > DD_ALERT_PCT else ''}\n\n"
+        f"<b>📊 Performance</b>\n"
+        f"Trades: <code>{tot_trades}</code> (W:{wins} / L:{losses})\n"
+        f"Win Rate: <code>{wr:.1f}%</code>\n\n"
+        f"<b>⚙️ Settings</b>\n"
+        f"Risk/trade:   <code>{config.get('risk_pct', '?')}%</code>\n"
+        f"Max DD:       <code>{config.get('max_dd_pct', '?')}%</code>\n"
+        f"Max Pos:      <code>{config.get('max_positions', '?')}</code>\n"
+        f"Min Conf:     <code>{float(config.get('min_confidence', 0))*100:.0f}%</code>\n"
+        f"Capital:      <code>{'$'+f'{alloc:,.0f}' if alloc > 0 else 'Full balance'}</code>\n"
     )
 
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=keyboard)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 @restricted
@@ -315,33 +315,33 @@ async def cmd_perf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pf = gross_win / gross_los if gross_los > 0 else 0.0
 
     dd_color = "🟥" if dd > DD_CRITICAL_PCT else "🟧" if dd > DD_ALERT_PCT else "🟩"
-    pnl_str  = f"✅ \\+${tot_pnl:,.2f}" if tot_pnl >= 0 else f"❌ \\-${abs(tot_pnl):,.2f}"
+    pnl_str  = f"✅ +${tot_pnl:,.2f}" if tot_pnl >= 0 else f"❌ -${abs(tot_pnl):,.2f}"
 
     text = (
-        f"*📊 Performance Report*\n"
-        f"_{ts} UTC_\n"
+        f"<b>📊 Performance Report</b>\n"
+        f"<i>{ts} UTC</i>\n"
         f"{'─'*28}\n"
-        f"Balance:      `${balance:,.2f}`\n"
-        f"Equity:       `${equity:,.2f}`\n"
-        f"Total P\\&L:    {pnl_str}\n"
-        f"Drawdown:     {dd_color} `{dd:.2f}%`\n\n"
-        f"*Trades*\n"
-        f"Total:        `{tot_t}`\n"
-        f"Wins/Losses:  `{wins} / {losses}`\n"
-        f"Win Rate:     `{wr:.1f}%`\n"
-        f"Profit Factor:`{pf:.2f}`\n"
-        f"AI Accuracy:  `{ai_acc:.1f}%`\n"
+        f"Balance:      <code>${balance:,.2f}</code>\n"
+        f"Equity:       <code>${equity:,.2f}</code>\n"
+        f"Total P&amp;L:    {pnl_str}\n"
+        f"Drawdown:     {dd_color} <code>{dd:.2f}%</code>\n\n"
+        f"<b>Trades</b>\n"
+        f"Total:        <code>{tot_t}</code>\n"
+        f"Wins/Losses:  <code>{wins} / {losses}</code>\n"
+        f"Win Rate:     <code>{wr:.1f}%</code>\n"
+        f"Profit Factor:<code>{pf:.2f}</code>\n"
+        f"AI Accuracy:  <code>{ai_acc:.1f}%</code>\n"
     )
     if summary:
-        text += f"\n*Per Symbol*\n"
+        text += f"\n<b>Per Symbol</b>\n"
         for row in summary[:5]:
             sym = row.get("symbol", "")
             sym_pnl = float(row.get("total_pnl", 0))
             sym_wr  = float(row.get("win_rate_pct", 0))
             pnl_icon = "✅" if sym_pnl >= 0 else "❌"
-            text += f"{pnl_icon} `{sym:<8}` P\\&L: `${sym_pnl:+,.2f}` WR: `{sym_wr:.0f}%`\n"
+            text += f"{pnl_icon} <code>{sym:<8}</code> P&amp;L: <code>${sym_pnl:+,.2f}</code> WR: <code>{sym_wr:.0f}%</code>\n"
 
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 @restricted
@@ -351,7 +351,7 @@ async def cmd_trades(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 No trades recorded yet.")
         return
 
-    text = "*📋 Last 10 Trades*\n" + "─" * 28 + "\n"
+    text = "<b>📋 Last 10 Trades</b>\n" + "─" * 28 + "\n"
     for t in trades:
         ts     = str(t.get("timestamp", ""))[:16]
         sym    = t.get("symbol", "")
@@ -364,16 +364,16 @@ async def cmd_trades(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if action == "CLOSE" and pnl is not None:
             pnl_v = float(pnl)
             icon  = "✅" if pnl_v >= 0 else "❌"
-            pnl_s = f"  P\\&L: `{icon}{pnl_v:+.2f}`"
+            pnl_s = f"  P&amp;L: <code>{icon}{pnl_v:+.2f}</code>"
         else:
             pnl_s = ""
         reg_e = REGIME_EMOJI.get(str(regime), "⚪")
         text += (
-            f"`{ts}` {reg_e} *{sym}* `{action}` "
-            f"lots:`{lots}` conf:`{conf:.0f}%`{pnl_s}\n"
+            f"<code>{ts}</code> {reg_e} <b>{sym}</b> <code>{action}</code> "
+            f"lots:<code>{lots}</code> conf:<code>{conf:.0f}%</code>{pnl_s}\n"
         )
 
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 @restricted
@@ -383,7 +383,7 @@ async def cmd_regimes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 No regime data yet.")
         return
 
-    text = "*🌐 Current Market Regimes*\n" + "─" * 28 + "\n"
+    text = "<b>🌐 Current Market Regimes</b>\n" + "─" * 28 + "\n"
     for r in regimes:
         sym   = r.get("symbol", "")
         reg   = r.get("regime", "Undefined")
@@ -393,14 +393,14 @@ async def cmd_regimes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ai    = float(r.get("ai_score", 0)) * 100
         ts    = str(r.get("timestamp", ""))[:16]
         icon  = REGIME_EMOJI.get(str(reg), "⚪")
-        ai_s  = f"AI:`{ai:+.1f}%`"
+        ai_s  = f"AI:<code>{ai:+.1f}%</code>"
         text += (
-            f"{icon} *{sym}* — _{reg}_\n"
-            f"  conf:`{conf:.0f}%` ADX:`{adx}` RSI:`{rsi}` {ai_s}\n"
-            f"  _{ts} UTC_\n\n"
+            f"{icon} <b>{sym}</b> — <i>{reg}</i>\n"
+            f"  conf:<code>{conf:.0f}%</code> ADX:<code>{adx}</code> RSI:<code>{rsi}</code> {ai_s}\n"
+            f"  <i>{ts} UTC</i>\n\n"
         )
 
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 @restricted
@@ -410,7 +410,7 @@ async def cmd_summary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 No trade summary available yet.")
         return
 
-    text = "*💰 Per\\-Symbol P\\&L Summary*\n" + "─" * 28 + "\n"
+    text = "<b>💰 Per-Symbol P&amp;L Summary</b>\n" + "─" * 28 + "\n"
     total_pnl = 0.0
     for row in summary:
         sym     = row.get("symbol", "")
@@ -422,13 +422,13 @@ async def cmd_summary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         icon    = "✅" if pnl >= 0 else "❌"
         total_pnl += pnl
         text += (
-            f"{icon} *{sym}*\n"
-            f"  P\\&L:`${pnl:+,.2f}` WR:`{wr:.0f}%` T:`{trades}` \\(W:{w}/L:{l}\\)\n"
+            f"{icon} <b>{sym}</b>\n"
+            f"  P&amp;L:<code>${pnl:+,.2f}</code> WR:<code>{wr:.0f}%</code> T:<code>{trades}</code> (W:{w}/L:{l})\n"
         )
 
     total_icon = "✅" if total_pnl >= 0 else "❌"
-    text += f"{'─'*28}\n{total_icon} *TOTAL: `${total_pnl:+,.2f}`*\n"
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    text += f"{'─'*28}\n{total_icon} <b>TOTAL: <code>${total_pnl:+,.2f}</code></b>\n"
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 @restricted
@@ -438,7 +438,7 @@ async def cmd_events(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 No events logged yet.")
         return
 
-    text = "*📟 Recent Events*\n" + "─" * 28 + "\n"
+    text = "<b>📟 Recent Events</b>\n" + "─" * 28 + "\n"
     TYPE_ICON = {"HALT": "⛔", "RESUME": "▶️", "OPEN": "📂", "CLOSE": "📁",
                  "ERROR": "🔴", "INFO": "ℹ️", "DEINIT": "🔌", "WARN": "⚠️"}
     for ev in events:
@@ -446,11 +446,11 @@ async def cmd_events(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         typ = ev.get("type", "INFO")
         msg = str(ev.get("message", ""))[:80]
         ico = TYPE_ICON.get(typ, "•")
-        # Escape markdown special chars in msg
-        msg = msg.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
-        text += f"`{ts}` {ico} *{typ}* {msg}\n"
+        # Escape HTML special chars in msg
+        msg = msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        text += f"<code>{ts}</code> {ico} <b>{typ}</b> {msg}\n"
 
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 @restricted
@@ -458,25 +458,25 @@ async def cmd_config(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cfg = db_get_config()
     alloc = float(cfg.get("allocated_capital", 0))
     text = (
-        f"*⚙️ EA Configuration*\n"
+        f"<b>⚙️ EA Configuration</b>\n"
         f"{'─'*28}\n"
-        f"Allocated Capital: `{'$'+f'{alloc:,.0f}' if alloc > 0 else 'Full balance'}`\n"
-        f"Risk % / trade:    `{cfg.get('risk_pct', '?')}%`\n"
-        f"Max Drawdown:      `{cfg.get('max_dd_pct', '?')}%`\n"
-        f"Max Positions:     `{cfg.get('max_positions', '?')}`\n"
-        f"Min Confidence:    `{float(cfg.get('min_confidence', 0))*100:.0f}%`\n"
-        f"Halted:            `{cfg.get('halted', False)}`\n"
-        f"Paused:            `{cfg.get('paused', False)}`\n"
-        f"Updated by:        `{cfg.get('updated_by', '?')}`\n"
-        f"Updated at:        `{str(cfg.get('updated_at', 'N/A'))[:16]}`\n\n"
-        f"*Quick edit commands:*\n"
-        f"`/setcapital 5000` — allocate $5,000\n"
-        f"`/setrisk 1.5` — 1\\.5% risk per trade\n"
-        f"`/setconf 0.65` — 65% min confidence\n"
-        f"`/setmaxdd 15` — halt at 15% drawdown\n"
-        f"`/setmaxpos 5` — max 5 open positions\n"
+        f"Allocated Capital: <code>{'$'+f'{alloc:,.0f}' if alloc > 0 else 'Full balance'}</code>\n"
+        f"Risk % / trade:    <code>{cfg.get('risk_pct', '?')}%</code>\n"
+        f"Max Drawdown:      <code>{cfg.get('max_dd_pct', '?')}%</code>\n"
+        f"Max Positions:     <code>{cfg.get('max_positions', '?')}</code>\n"
+        f"Min Confidence:    <code>{float(cfg.get('min_confidence', 0))*100:.0f}%</code>\n"
+        f"Halted:            <code>{cfg.get('halted', False)}</code>\n"
+        f"Paused:            <code>{cfg.get('paused', False)}</code>\n"
+        f"Updated by:        <code>{cfg.get('updated_by', '?')}</code>\n"
+        f"Updated at:        <code>{str(cfg.get('updated_at', 'N/A'))[:16]}</code>\n\n"
+        f"<b>Quick edit commands:</b>\n"
+        f"<code>/setcapital 5000</code> — allocate $5,000\n"
+        f"<code>/setrisk 1.5</code> — 1.5% risk per trade\n"
+        f"<code>/setconf 0.65</code> — 65% min confidence\n"
+        f"<code>/setmaxdd 15</code> — halt at 15% drawdown\n"
+        f"<code>/setmaxpos 5</code> — max 5 open positions\n"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 # ── Control commands ──────────────────────────────────────────────────
@@ -484,7 +484,7 @@ async def cmd_config(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if db_push_config({"halted": False, "paused": False}):
-        await update.message.reply_text("▶️ EA *Resumed* — will apply on next config sync.", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("▶️ EA <b>Resumed</b> — will apply on next config sync.", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("❌ Failed to update config.")
 
@@ -492,7 +492,7 @@ async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if db_push_config({"paused": True}):
-        await update.message.reply_text("⏸ EA *Paused* — no new trades will open.", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("⏸ EA <b>Paused</b> — no new trades will open.", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("❌ Failed to update config.")
 
@@ -505,8 +505,8 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("❌ Cancel",        callback_data="cancel_halt"),
     ]])
     await update.message.reply_text(
-        "⚠️ *Confirm Emergency Stop?*\nThis will halt the EA immediately\\. Use /resume to restart\\.",
-        parse_mode=ParseMode.MARKDOWN_V2,
+        "⚠️ <b>Confirm Emergency Stop?</b>\nThis will halt the EA immediately. Use /resume to restart.",
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
     )
 
@@ -518,13 +518,13 @@ async def cmd_setcapital(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if amount < 0:
             raise ValueError
     except (ValueError, IndexError):
-        await update.message.reply_text("Usage: `/setcapital 5000` (0 = use full balance)", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("Usage: <code>/setcapital 5000</code> (0 = use full balance)", parse_mode=ParseMode.HTML)
         return
     if db_push_config({"allocated_capital": amount}):
         if amount == 0:
-            await update.message.reply_text("✅ Allocated capital cleared — using *full account balance*\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await update.message.reply_text("✅ Allocated capital cleared — using <b>full account balance</b>.", parse_mode=ParseMode.HTML)
         else:
-            await update.message.reply_text(f"✅ Allocated capital set to `${amount:,.2f}`\\. EA will size lots based on this amount only\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await update.message.reply_text(f"✅ Allocated capital set to <code>${amount:,.2f}</code>. EA will size lots based on this amount only.", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("❌ Failed to update config.")
 
@@ -535,10 +535,10 @@ async def cmd_setrisk(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         val = float(ctx.args[0])
         assert 0.1 <= val <= 5.0
     except:
-        await update.message.reply_text("Usage: `/setrisk 1.5` (range: 0.1 – 5.0)", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("Usage: <code>/setrisk 1.5</code> (range: 0.1 – 5.0)", parse_mode=ParseMode.HTML)
         return
     if db_push_config({"risk_pct": val}):
-        await update.message.reply_text(f"✅ Risk per trade set to `{val}%`", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(f"✅ Risk per trade set to <code>{val}%</code>", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("❌ Failed to update config.")
 
@@ -549,10 +549,10 @@ async def cmd_setconf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         val = float(ctx.args[0])
         assert 0.40 <= val <= 0.95
     except:
-        await update.message.reply_text("Usage: `/setconf 0.65` (range: 0.40 – 0.95)", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("Usage: <code>/setconf 0.65</code> (range: 0.40 – 0.95)", parse_mode=ParseMode.HTML)
         return
     if db_push_config({"min_confidence": val}):
-        await update.message.reply_text(f"✅ Min AI confidence set to `{val*100:.0f}%`", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(f"✅ Min AI confidence set to <code>{val*100:.0f}%</code>", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("❌ Failed to update config.")
 
@@ -563,10 +563,10 @@ async def cmd_setmaxdd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         val = float(ctx.args[0])
         assert 5.0 <= val <= 50.0
     except:
-        await update.message.reply_text("Usage: `/setmaxdd 15` (range: 5 – 50)", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("Usage: <code>/setmaxdd 15</code> (range: 5 – 50)", parse_mode=ParseMode.HTML)
         return
     if db_push_config({"max_dd_pct": val}):
-        await update.message.reply_text(f"✅ Max drawdown halt set to `{val}%`", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(f"✅ Max drawdown halt set to <code>{val}%</code>", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("❌ Failed to update config.")
 
@@ -577,10 +577,10 @@ async def cmd_setmaxpos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         val = int(ctx.args[0])
         assert 1 <= val <= 20
     except:
-        await update.message.reply_text("Usage: `/setmaxpos 5` (range: 1 – 20)", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("Usage: <code>/setmaxpos 5</code> (range: 1 – 20)", parse_mode=ParseMode.HTML)
         return
     if db_push_config({"max_positions": val}):
-        await update.message.reply_text(f"✅ Max positions set to `{val}`", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(f"✅ Max positions set to <code>{val}</code>", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("❌ Failed to update config.")
 
@@ -588,32 +588,32 @@ async def cmd_setmaxpos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 @restricted
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = (
-        "*📖 ApexHydra Bot — Help*\n\n"
-        "*Monitoring:*\n"
-        "`/status` — Full status with inline controls\n"
-        "`/perf` — Performance metrics \\+ per\\-symbol breakdown\n"
-        "`/trades` — Last 10 trade entries/exits\n"
-        "`/regimes` — Live market regime per symbol\n"
-        "`/summary` — Per\\-symbol P\\&L table\n"
-        "`/events` — Recent EA event log\n"
-        "`/config` — View all current settings\n\n"
-        "*Control:*\n"
-        "`/resume` — Resume EA trading\n"
-        "`/pause` — Pause EA \\(no new trades\\)\n"
-        "`/stop` — ⚠️ Emergency halt \\(with confirmation\\)\n\n"
-        "*Risk Settings:*\n"
-        "`/setcapital <$>` — Allocated capital \\(0 = full balance\\)\n"
-        "`/setrisk <pct>` — Risk % per trade \\(0\\.1–5\\.0\\)\n"
-        "`/setconf <0.4–0.9>` — Min AI confidence\n"
-        "`/setmaxdd <pct>` — Max drawdown halt threshold\n"
-        "`/setmaxpos <n>` — Max simultaneous positions\n\n"
-        "*Auto\\-Alerts:*\n"
-        f"• Drawdown exceeds `{DD_ALERT_PCT}%` or `{DD_CRITICAL_PCT}%`\n"
+        "<b>📖 ApexHydra Bot — Help</b>\n\n"
+        "<b>Monitoring:</b>\n"
+        "<code>/status</code> — Full status with inline controls\n"
+        "<code>/perf</code> — Performance metrics + per-symbol breakdown\n"
+        "<code>/trades</code> — Last 10 trade entries/exits\n"
+        "<code>/regimes</code> — Live market regime per symbol\n"
+        "<code>/summary</code> — Per-symbol P&amp;L table\n"
+        "<code>/events</code> — Recent EA event log\n"
+        "<code>/config</code> — View all current settings\n\n"
+        "<b>Control:</b>\n"
+        "<code>/resume</code> — Resume EA trading\n"
+        "<code>/pause</code> — Pause EA (no new trades)\n"
+        "<code>/stop</code> — ⚠️ Emergency halt (with confirmation)\n\n"
+        "<b>Risk Settings:</b>\n"
+        "<code>/setcapital &lt;$&gt;</code> — Allocated capital (0 = full balance)\n"
+        "<code>/setrisk &lt;pct&gt;</code> — Risk % per trade (0.1–5.0)\n"
+        "<code>/setconf &lt;0.4–0.9&gt;</code> — Min AI confidence\n"
+        "<code>/setmaxdd &lt;pct&gt;</code> — Max drawdown halt threshold\n"
+        "<code>/setmaxpos &lt;n&gt;</code> — Max simultaneous positions\n\n"
+        "<b>Auto-Alerts:</b>\n"
+        f"• Drawdown exceeds <code>{DD_ALERT_PCT}%</code> or <code>{DD_CRITICAL_PCT}%</code>\n"
         f"• EA halted by drawdown limit\n"
-        f"• Every trade open/close \\(with P\\&L\\)\n"
+        f"• Every trade open/close (with P&amp;L)\n"
         f"• Daily performance summary at 00:00 UTC\n"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -628,11 +628,11 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data == "ctrl_resume":
         ok = db_push_config({"halted": False, "paused": False})
-        await query.edit_message_text("▶️ EA *Resumed*\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        await query.edit_message_text("▶️ EA <b>Resumed</b>.", parse_mode=ParseMode.HTML)
 
     elif data == "ctrl_pause":
         ok = db_push_config({"paused": True})
-        await query.edit_message_text("⏸ EA *Paused*\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        await query.edit_message_text("⏸ EA <b>Paused</b>.", parse_mode=ParseMode.HTML)
 
     elif data == "ctrl_stop":
         keyboard = InlineKeyboardMarkup([[
@@ -640,17 +640,17 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("❌ Cancel",        callback_data="cancel_halt"),
         ]])
         await query.edit_message_text(
-            "⚠️ *Confirm Emergency Stop?*",
-            parse_mode=ParseMode.MARKDOWN_V2,
+            "⚠️ <b>Confirm Emergency Stop?</b>",
+            parse_mode=ParseMode.HTML,
             reply_markup=keyboard,
         )
 
     elif data == "confirm_halt":
         db_push_config({"halted": True, "paused": True})
-        await query.edit_message_text("⛔ EA *HALTED*\\. Use /resume to restart\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        await query.edit_message_text("⛔ EA <b>HALTED</b>. Use /resume to restart.", parse_mode=ParseMode.HTML)
 
     elif data == "cancel_halt":
-        await query.edit_message_text("✅ Halt cancelled\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        await query.edit_message_text("✅ Halt cancelled.", parse_mode=ParseMode.HTML)
 
     elif data == "status_refresh":
         # Re-run status inline
@@ -668,14 +668,14 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         is_halted = config.get("halted", False)
         is_paused = config.get("paused", False)
         status_icon = "⛔ HALTED" if is_halted else ("⏸ PAUSED" if is_paused else "✅ ACTIVE")
-        pnl_s = f"\\+${tot_pnl:,.2f}" if tot_pnl >= 0 else f"\\-${abs(tot_pnl):,.2f}"
+        pnl_s = f"+${tot_pnl:,.2f}" if tot_pnl >= 0 else f"-${abs(tot_pnl):,.2f}"
         text = (
-            f"*⚡ ApexHydra Status*  _\\(refreshed\\)_\n"
-            f"*Status:* {status_icon}\n"
-            f"Balance: `${balance:,.2f}`  Equity: `${equity:,.2f}`\n"
-            f"P\\&L: `{pnl_s}`  DD: `{dd:.1f}%`\n"
-            f"Trades: `{tot_t}` WR:`{wr:.1f}%`\n"
-            f"Capital: `{'$'+f'{alloc:,.0f}' if alloc > 0 else 'Full balance'}`\n"
+            f"<b>⚡ ApexHydra Status</b>  <i>(refreshed)</i>\n"
+            f"<b>Status:</b> {status_icon}\n"
+            f"Balance: <code>${balance:,.2f}</code>  Equity: <code>${equity:,.2f}</code>\n"
+            f"P&amp;L: <code>{pnl_s}</code>  DD: <code>{dd:.1f}%</code>\n"
+            f"Trades: <code>{tot_t}</code> WR:<code>{wr:.1f}%</code>\n"
+            f"Capital: <code>{'$'+f'{alloc:,.0f}' if alloc > 0 else 'Full balance'}</code>\n"
         )
         keyboard = InlineKeyboardMarkup([
             [
@@ -685,7 +685,7 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⛔ Emergency Stop", callback_data="ctrl_stop")],
             [InlineKeyboardButton("🔄 Refresh",         callback_data="status_refresh")],
         ])
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=keyboard)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -717,25 +717,25 @@ async def monitor_job(ctx: ContextTypes.DEFAULT_TYPE):
         if dd >= DD_CRITICAL_PCT:
             if dd_alerted < DD_CRITICAL_PCT or (last_dd_alert and now - last_dd_alert > cooldown):
                 msg = (
-                    f"🔴 *CRITICAL DRAWDOWN ALERT*\n"
-                    f"Current DD: `{dd:.2f}%` \\(threshold: `{DD_CRITICAL_PCT}%`\\)\n"
-                    f"Balance: `${float(perf.get('balance',0)):,.2f}`\n"
+                    f"🔴 <b>CRITICAL DRAWDOWN ALERT</b>\n"
+                    f"Current DD: <code>{dd:.2f}%</code> (threshold: <code>{DD_CRITICAL_PCT}%</code>)\n"
+                    f"Balance: <code>${float(perf.get('balance',0)):,.2f}</code>\n"
                     f"Consider: /stop"
                 )
                 for cid in chat_ids:
-                    await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.MARKDOWN_V2)
+                    await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
                 _alert_state["last_dd_alert"]  = now
                 _alert_state["dd_alerted_pct"] = dd
 
         elif dd >= DD_ALERT_PCT:
             if dd_alerted < DD_ALERT_PCT or (last_dd_alert and now - last_dd_alert > cooldown):
                 msg = (
-                    f"🟠 *Drawdown Warning*\n"
-                    f"Current DD: `{dd:.2f}%` \\(alert at `{DD_ALERT_PCT}%`\\)\n"
-                    f"Balance: `${float(perf.get('balance',0)):,.2f}`"
+                    f"🟠 <b>Drawdown Warning</b>\n"
+                    f"Current DD: <code>{dd:.2f}%</code> (alert at <code>{DD_ALERT_PCT}%</code>)\n"
+                    f"Balance: <code>${float(perf.get('balance',0)):,.2f}</code>"
                 )
                 for cid in chat_ids:
-                    await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.MARKDOWN_V2)
+                    await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
                 _alert_state["last_dd_alert"]  = now
                 _alert_state["dd_alerted_pct"] = dd
 
@@ -746,12 +746,12 @@ async def monitor_job(ctx: ContextTypes.DEFAULT_TYPE):
         # ── EA halted alert ───────────────────────────────────────────
         if is_halted and not _alert_state.get("halted_alerted"):
             msg = (
-                f"⛔ *EA HALTED*\n"
-                f"The EA has been halted\\. Current DD: `{dd:.2f}%`\n"
-                f"Use /resume to restart when ready\\."
+                f"⛔ <b>EA HALTED</b>\n"
+                f"The EA has been halted. Current DD: <code>{dd:.2f}%</code>\n"
+                f"Use /resume to restart when ready."
             )
             for cid in chat_ids:
-                await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.MARKDOWN_V2)
+                await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
             _alert_state["halted_alerted"] = True
         elif not is_halted:
             _alert_state["halted_alerted"] = False
@@ -778,25 +778,25 @@ async def monitor_job(ctx: ContextTypes.DEFAULT_TYPE):
                     sl    = t.get("sl", 0)
                     tp    = t.get("tp", 0)
                     msg   = (
-                        f"📂 *Trade OPENED*\n"
-                        f"{reg_e} `{sym}` | Lots: `{lots}` | Conf: `{conf:.0f}%`\n"
-                        f"Entry: `{price}` | SL: `{sl}` | TP: `{tp}`\n"
-                        f"Regime: _{regime}_ | `{ts_s}`"
+                        f"📂 <b>Trade OPENED</b>\n"
+                        f"{reg_e} <code>{sym}</code> | Lots: <code>{lots}</code> | Conf: <code>{conf:.0f}%</code>\n"
+                        f"Entry: <code>{price}</code> | SL: <code>{sl}</code> | TP: <code>{tp}</code>\n"
+                        f"Regime: <i>{regime}</i> | <code>{ts_s}</code>"
                     )
                 elif action == "CLOSE" and pnl is not None:
                     pnl_v = float(pnl)
                     icon  = "✅" if pnl_v >= 0 else "❌"
                     msg   = (
-                        f"📁 *Trade CLOSED* {icon}\n"
-                        f"{reg_e} `{sym}` P\\&L: `{pnl_v:+.2f}`\n"
-                        f"Lots: `{lots}` | `{ts_s}`"
+                        f"📁 <b>Trade CLOSED</b> {icon}\n"
+                        f"{reg_e} <code>{sym}</code> P&amp;L: <code>{pnl_v:+.2f}</code>\n"
+                        f"Lots: <code>{lots}</code> | <code>{ts_s}</code>"
                     )
                 else:
                     msg = None
 
                 if msg:
                     for cid in chat_ids:
-                        await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.MARKDOWN_V2)
+                        await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
 
     except Exception as e:
         logger.error(f"Monitor job error: {e}")
@@ -821,28 +821,28 @@ async def daily_summary_job(ctx: ContextTypes.DEFAULT_TYPE):
         losses   = int(perf.get("losses", 0))
         tot_pnl  = float(perf.get("total_pnl", 0))
         wr       = wins / tot_t * 100 if tot_t > 0 else 0
-        date_str = datetime.now(timezone.utc).strftime("%Y\\-%m\\-%d")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         pnl_icon = "✅" if tot_pnl >= 0 else "❌"
 
         text = (
-            f"📅 *Daily Summary — {date_str}*\n"
+            f"📅 <b>Daily Summary — {date_str}</b>\n"
             f"{'─'*28}\n"
-            f"Balance:  `${balance:,.2f}` \\| Equity: `${equity:,.2f}`\n"
-            f"P\\&L:      {pnl_icon} `{tot_pnl:+,.2f}`\n"
-            f"Drawdown: `{dd:.2f}%`\n"
-            f"Trades:   `{tot_t}` \\(W:{wins}/L:{losses}\\) WR:`{wr:.1f}%`\n"
+            f"Balance:  <code>${balance:,.2f}</code> | Equity: <code>${equity:,.2f}</code>\n"
+            f"P&amp;L:      {pnl_icon} <code>{tot_pnl:+,.2f}</code>\n"
+            f"Drawdown: <code>{dd:.2f}%</code>\n"
+            f"Trades:   <code>{tot_t}</code> (W:{wins}/L:{losses}) WR:<code>{wr:.1f}%</code>\n"
         )
         if summary:
-            text += "\n*Symbols:*\n"
+            text += "\n<b>Symbols:</b>\n"
             for row in summary[:6]:
                 sym     = row.get("symbol", "")
                 pnl     = float(row.get("total_pnl", 0))
                 wr_s    = float(row.get("win_rate_pct", 0))
                 icon    = "✅" if pnl >= 0 else "❌"
-                text += f"{icon} `{sym:<8}` `{pnl:+,.2f}` WR:`{wr_s:.0f}%`\n"
+                text += f"{icon} <code>{sym:<8}</code> <code>{pnl:+,.2f}</code> WR:<code>{wr_s:.0f}%</code>\n"
 
         for cid in ALLOWED_IDS:
-            await ctx.bot.send_message(cid, text, parse_mode=ParseMode.MARKDOWN_V2)
+            await ctx.bot.send_message(cid, text, parse_mode=ParseMode.HTML)
 
     except Exception as e:
         logger.error(f"Daily summary job error: {e}")
