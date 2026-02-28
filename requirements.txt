@@ -1,0 +1,14 @@
+# ── Modal AI Server ───────────────────────────────────────────────
+modal>=0.64
+numpy>=1.26
+scikit-learn>=1.4
+xgboost>=2.0
+scipy>=1.12
+fastapi[standard]>=0.110
+pydantic>=2.6
+supabase>=2.4
+
+# ── Streamlit Dashboard ───────────────────────────────────────────
+streamlit>=1.35
+plotly>=5.20
+pandas>=2.2
