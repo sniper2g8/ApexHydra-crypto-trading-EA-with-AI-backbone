@@ -158,8 +158,7 @@ int OnInit() {
    EventSetTimer(Inp_ScanSec);
    g_trade.SetExpertMagicNumber(Inp_Magic);
    g_trade.SetDeviationInPoints(Inp_Slippage);
-   g_trade.SetTypeFilling(ORDER_FILLING_IOC);
-
+   // Filling type is set per-symbol in ExecuteTrade — see GetFilling()
    g_balance_start = AccountInfoDouble(ACCOUNT_BALANCE);
    g_peak_equity   = AccountInfoDouble(ACCOUNT_EQUITY);
 
@@ -492,7 +491,9 @@ void CallModalAI(SSymbolData &s) {
    if(code != 200) {
       Log(sym + " Modal AI error: HTTP " + IntegerToString(code));
       s.ai_ok = false;
-      if(!Inp_AI_Fallback) s.signal = 0;
+      // Always reset signal on AI failure — stale signal from previous call must not persist
+      s.signal = 0;
+      s.confidence = 0;
       return;
    }
 
@@ -516,6 +517,22 @@ void CallModalAI(SSymbolData &s) {
 
    // Log to Supabase (regime change only — trades logged separately)
    if(Inp_DB_Enable) DBLogRegime(s);
+}
+
+//═══════════════════════════════════════════════════════════════════
+//  FILLING MODE AUTO-DETECT
+//  Brokers advertise which filling modes they support per symbol.
+//  IOC is rarely supported on crypto — FOK or RETURN is standard.
+//  Using the wrong mode → error 10017 "trade disabled".
+//═══════════════════════════════════════════════════════════════════
+
+ENUM_ORDER_TYPE_FILLING GetFilling(const string sym) {
+   // SYMBOL_FILLING_MODE returns a bitmask of supported filling types
+   long mode = 0;
+   SymbolInfoInteger(sym, SYMBOL_FILLING_MODE, mode);
+   if((mode & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;
+   if((mode & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;
+   return ORDER_FILLING_RETURN;
 }
 
 //═══════════════════════════════════════════════════════════════════
@@ -544,6 +561,10 @@ void ExecuteTrade(SSymbolData &s) {
    double price = is_buy ? SymbolInfoDouble(s.symbol, SYMBOL_ASK)
                          : SymbolInfoDouble(s.symbol, SYMBOL_BID);
 
+   // Set filling mode per-symbol — avoids error 10017 on brokers that
+   // don't support IOC (most crypto brokers use FOK or RETURN).
+   g_trade.SetTypeFilling(GetFilling(s.symbol));
+
    string cmt = "AH4|" + s.regime_name + "|" + IntegerToString(s.signal) +
                 "|" + DoubleToString(s.confidence,2);
 
@@ -569,7 +590,9 @@ void ExecuteTrade(SSymbolData &s) {
 
       if(Inp_DB_Enable) DBLogTrade(s, "OPEN", price, 0);
    } else {
-      Log("FAILED " + s.symbol + " err:" + IntegerToString(g_trade.ResultRetcode()));
+      Log("FAILED " + s.symbol + " err:" + IntegerToString(g_trade.ResultRetcode()) +
+          " [" + g_trade.ResultRetcodeDescription() + "]" +
+          " filling:" + EnumToString(GetFilling(s.symbol)));
    }
 }
 
@@ -678,7 +701,7 @@ void CheckRisk() {
 
 void PullConfig() {
    if(!Inp_DB_Enable) return;
-   string url     = Inp_DB_URL + "/rest/v1/ea_config?limit=1";
+   string url     = Inp_DB_URL + "/rest/v1/ea_config?magic=eq." + IntegerToString(Inp_Magic) + "&limit=1";
    string headers = "apikey: " + Inp_DB_Key + "\r\nAuthorization: Bearer " + Inp_DB_Key + "\r\n";
    char   req[], res[];
    string res_hdr;
@@ -704,7 +727,7 @@ void PullConfig() {
 
 void PushHaltToSupabase(bool halted) {
    if(!Inp_DB_Enable) return;
-   string url     = Inp_DB_URL + "/rest/v1/ea_config?limit=1";
+   string url     = Inp_DB_URL + "/rest/v1/ea_config?magic=eq." + IntegerToString(Inp_Magic);
    string headers = "Content-Type: application/json\r\n"
                   + "apikey: " + Inp_DB_Key + "\r\n"
                   + "Authorization: Bearer " + Inp_DB_Key + "\r\n"
@@ -731,7 +754,7 @@ bool DBPost(string table, string json_body) {
    StringToCharArray(json_body, req, 0, StringLen(json_body));
    string res_hdr;
    int code = WebRequest("POST", url, headers, 5000, req, res, res_hdr);
-   return (code == 200 || code == 201);
+   return (code == 200 || code == 201 || code == 204);
 }
 
 void DBLogTrade(const SSymbolData &s, string action, double price, double pnl) {
@@ -883,12 +906,16 @@ int FindSym(string sym) {
 
 double GetClosedPnL(ulong ticket) {
    HistorySelect(TimeCurrent()-86400*7, TimeCurrent());
+   double total_pnl = 0;
    for(int d=HistoryDealsTotal()-1; d>=0; d--) {
       ulong dt = HistoryDealGetTicket(d);
-      if(HistoryDealGetInteger(dt,DEAL_POSITION_ID)==(long)ticket)
-         return HistoryDealGetDouble(dt,DEAL_PROFIT);
+      if(HistoryDealGetInteger(dt, DEAL_POSITION_ID) == (long)ticket &&
+         HistoryDealGetInteger(dt, DEAL_ENTRY) == DEAL_ENTRY_OUT)
+         total_pnl += HistoryDealGetDouble(dt, DEAL_PROFIT)
+                   +  HistoryDealGetDouble(dt, DEAL_SWAP)
+                   +  HistoryDealGetDouble(dt, DEAL_COMMISSION);
    }
-   return 0;
+   return total_pnl;
 }
 
 void Log(string msg) {

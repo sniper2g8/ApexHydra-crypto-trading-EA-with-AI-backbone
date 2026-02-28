@@ -615,8 +615,8 @@ def _regime_filter(regime_id: int, p: AIRequest, raw_score: float) -> int:
     if regime_id == 1:
         return -1 if p.bars.close[0] < p.ema50 else 0
     if regime_id == 2:
-        if raw_score > 0: return +1 if p.rsi < 45 else 0
-        if raw_score < 0: return -1 if p.rsi > 55 else 0
+        if raw_score > 0: return +1 if p.rsi < 52 else 0
+        if raw_score < 0: return -1 if p.rsi > 48 else 0
         return 0
     if regime_id == 3:
         return (1 if raw_score > 0 else -1) if abs(raw_score) >= 0.40 else 0
@@ -627,7 +627,7 @@ def _regime_filter(regime_id: int, p: AIRequest, raw_score: float) -> int:
         if c[0] > hh50: return +1
         if c[0] < ll50: return -1
         return 0
-    return 2
+    return 0  # Unknown regime — block all trades
 
 
 def _build_reasoning(regime_id, score, conf, p, feature_scores, ml_sig=0, ml_conf=0.0):
@@ -756,7 +756,9 @@ async def predict(request: AIRequest) -> AIResponse:
     )
 
     # ── Final confidence guard ───────────────────────────────────────
-    MIN_CONFIDENCE = 0.52
+    # Use a low floor (0.35) — the EA applies its own min_confidence from Supabase config.
+    # The hardcoded 0.52 here was blocking trades when operator lowers threshold via dashboard.
+    MIN_CONFIDENCE = 0.35
     if confidence < MIN_CONFIDENCE:
         signal = 0; lots = sl_price = tp_price = 0.0
 

@@ -381,47 +381,48 @@ def _render_kpis(balance, equity, dd, tot, wins, total_pnl):
     kpi(kpi_cols[4], "Total PnL", f"${total_pnl:+,.2f}",
         "metric-val-pos" if total_pnl >= 0 else "metric-val-neg")
     kpi(kpi_cols[5], "Trades",    str(tot))
-    return balance, wr
+    return balance
 
 if not perf_df.empty:
     latest    = perf_df.iloc[-1]
-    balance, wr = _render_kpis(
+    balance = _render_kpis(
         float(latest.get("balance", 0)),
         float(latest.get("equity",  0)),
-        float(latest.get("drawdown", 0)) * 100,
+        float(latest.get("drawdown", 0)) * 100,   # stored as fraction in perf table
         int(latest.get("total_trades", 0)),
         int(latest.get("wins", 0)),
         float(latest.get("total_pnl", 0)),
     )
 
 elif cfg_data and cfg_data.get("live_balance"):
-    # ── Fall back to live snapshot written by EA into ea_config ──────────
+    # ── Fallback: read live_* fields the EA PATCHes into ea_config every 15s ──
     live_ts = cfg_data.get("live_ts", "")
-    balance, wr = _render_kpis(
+    balance = _render_kpis(
         float(cfg_data.get("live_balance", 0)),
         float(cfg_data.get("live_equity",  0)),
-        float(cfg_data.get("live_dd_pct",  0)),
-        int(cfg_data.get("live_trades", 0)),
-        int(cfg_data.get("live_wins",   0)),
-        float(cfg_data.get("live_pnl",  0)),
+        float(cfg_data.get("live_dd_pct",  0)),   # already in % — EA sends g_dd_pct
+        int(cfg_data.get("live_trades", 0) or 0),
+        int(cfg_data.get("live_wins",   0) or 0),
+        float(cfg_data.get("live_pnl",  0) or 0),
     )
-    st.caption(f"⚡ Live snapshot from EA · Last update: {live_ts}")
+    st.caption(f"⚡ Live snapshot from EA — last update: {live_ts}")
 
 else:
     balance = 0
     for c in kpi_cols:
         kpi(c, "—", "N/A")
 
-# Capital budget banner
+# Capital budget banner (shown in all branches that have data)
 if cfg_data:
-    tcap = float(cfg_data.get("trading_capital", 0))
+    tcap = float(cfg_data.get("trading_capital", 0) or 0)
     if tcap > 0:
-        cpct = float(cfg_data.get("capital_pct", 100))
+        cpct = float(cfg_data.get("capital_pct", 100) or 100)
         eff  = tcap * (cpct / 100)
+        bal_str = f"${balance:,.2f}" if balance > 0 else "full balance"
         st.info(
             f"💰 **Capital Budget**: ${tcap:,.2f} × {cpct:.0f}% = "
-            f"**Effective ${eff:,.2f}** "
-            f"(Full balance: ${balance:,.2f})"
+            f"**Effective ${eff:,.2f}**"
+            + (f" (Full balance: ${balance:,.2f})" if balance > 0 else "")
         )
 
 st.markdown("---")

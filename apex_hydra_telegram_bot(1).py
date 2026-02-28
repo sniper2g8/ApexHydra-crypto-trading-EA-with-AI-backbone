@@ -138,6 +138,9 @@ def db_get_latest_performance() -> dict:
     r = sb.table("performance").select("*").order("timestamp", desc=True).limit(1).execute()
     if r.data:
         row = r.data[0]
+        # Normalize drawdown from fraction → % for consistent downstream use
+        if row.get("drawdown") is not None and float(row.get("drawdown", 0)) <= 1.0:
+            row["drawdown"] = float(row["drawdown"]) * 100.0
         # Merge live fields from ea_config if they're fresher
         try:
             cfg = sb.table("ea_config").select(
@@ -146,10 +149,10 @@ def db_get_latest_performance() -> dict:
             ).limit(1).execute()
             if cfg.data and cfg.data[0].get("live_balance"):
                 c = cfg.data[0]
-                # Use live values if ea_config was updated more recently
+                # Use live values — ea_config is patched every 15s by the EA
                 row["balance"]      = c.get("live_balance",  row.get("balance", 0))
                 row["equity"]       = c.get("live_equity",   row.get("equity", 0))
-                row["drawdown"]     = (c.get("live_dd_pct", 0) or 0) / 100.0
+                row["drawdown"]     = float(c.get("live_dd_pct", 0) or 0)  # EA sends % directly
                 row["total_pnl"]    = c.get("live_pnl",      row.get("total_pnl", 0))
                 row["total_trades"] = c.get("live_trades",   row.get("total_trades", 0))
                 row["wins"]         = c.get("live_wins",     row.get("wins", 0))
@@ -167,7 +170,7 @@ def db_get_latest_performance() -> dict:
                 return {
                     "balance":       c.get("live_balance", 0),
                     "equity":        c.get("live_equity",  0),
-                    "drawdown":      (c.get("live_dd_pct", 0) or 0) / 100.0,
+                    "drawdown":      float(c.get("live_dd_pct", 0) or 0),  # EA sends % directly
                     "total_pnl":     c.get("live_pnl",     0),
                     "total_trades":  c.get("live_trades",  0),
                     "wins":          c.get("live_wins",    0),
