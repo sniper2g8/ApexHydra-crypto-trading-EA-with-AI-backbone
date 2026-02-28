@@ -262,7 +262,7 @@ with st.sidebar:
     modal_url = st.secrets.get("MODAL_URL", "")
     if modal_url:
         try:
-            r = requests.get(f"{modal_url.rstrip('/')}/apex-hydracrypto-health", timeout=5)
+            r = requests.get(f"{modal_url.rstrip('/')}/health", timeout=5)
             if r.status_code == 200:
                 h = r.json()
                 ml = h.get("ml_model", {})
@@ -280,7 +280,7 @@ with st.sidebar:
             st.markdown('<div class="capital-box">🔴 Modal: unreachable</div>', unsafe_allow_html=True)
     else:
         st.markdown(
-            '<div class="capital-box">Add <code>MODAL_URL</code> to secrets.toml to see ML status</div>',
+            '<div class="capital-box">Add <code>MODAL_URL</code> to secrets.toml<br><small>e.g. <code>https://YOUR_WORKSPACE--apex-hydracrypto-apexhydra.modal.run</code></small></div>',
             unsafe_allow_html=True
         )
 
@@ -756,7 +756,7 @@ with tab7:
                                 "digits":          2,
                             }
                             r = requests.post(
-                                f"{MODAL_URL.rstrip('/')}/apex-hydracrypto-backtest",
+                                f"{MODAL_URL.rstrip('/')}/backtest",
                                 json=payload, timeout=120
                             )
                             if r.status_code == 200:

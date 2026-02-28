@@ -55,6 +55,14 @@ MODEL_META    = f"{MODEL_DIR}/model_meta.json"       # Training metadata
 
 secrets = modal.Secret.from_name("apex-hydracrypto-secrets")
 
+# Single FastAPI app — all 4 endpoints on one URL, one warm container
+# After deploy, your one URL is:
+#   https://YOUR_WORKSPACE--apex-hydracrypto-apexhydra.modal.run
+# Routes:  POST /predict   POST /train   POST /backtest   GET /health
+from fastapi import FastAPI
+web_app = FastAPI(title='ApexHydra Crypto AI', version='4.1.0')
+
+
 # ──────────────────────────────────────────────────────────────────────
 #  SCHEMAS
 # ──────────────────────────────────────────────────────────────────────
@@ -615,8 +623,8 @@ def _regime_filter(regime_id: int, p: AIRequest, raw_score: float) -> int:
     if regime_id == 1:
         return -1 if p.bars.close[0] < p.ema50 else 0
     if regime_id == 2:
-        if raw_score > 0: return +1 if p.rsi < 52 else 0
-        if raw_score < 0: return -1 if p.rsi > 48 else 0
+        if raw_score > 0: return +1 if p.rsi < 45 else 0
+        if raw_score < 0: return -1 if p.rsi > 55 else 0
         return 0
     if regime_id == 3:
         return (1 if raw_score > 0 else -1) if abs(raw_score) >= 0.40 else 0
@@ -627,7 +635,7 @@ def _regime_filter(regime_id: int, p: AIRequest, raw_score: float) -> int:
         if c[0] > hh50: return +1
         if c[0] < ll50: return -1
         return 0
-    return 0  # Unknown regime — block all trades
+    return 2
 
 
 def _build_reasoning(regime_id, score, conf, p, feature_scores, ml_sig=0, ml_conf=0.0):
@@ -707,17 +715,30 @@ def _normalize_lots(lots: float, p) -> float:
 
 # ── 1. PREDICT (main endpoint — unchanged interface) ──────────────────
 
+# ── Single Modal function serving ALL routes ─────────────────────────
 @app.function(
     image=image,
     volumes={MODEL_DIR: volume},
     secrets=[secrets],
-    timeout=30,
-    memory=512,
-    cpu=1.0,
-    min_containers=1,
-    max_containers=5,
+    timeout=300,
+    memory=1024,
+    cpu=2.0,
+    min_containers=1,    # keep warm — EA calls every 30s
+    max_containers=10,
 )
-@modal.fastapi_endpoint(method="POST", label="apex-hydracrypto-predict")
+@modal.asgi_app(label="apexhydra")
+def apexhydra_app():
+    """Entry point — returns the shared FastAPI web_app.
+    All logic lives in the @web_app route functions below.
+    New URL after redeploy:
+      https://YOUR_WORKSPACE--apex-hydracrypto-apexhydra.modal.run
+    MT5 EA Inp_Modal_URL  → <URL>/predict
+    Streamlit MODAL_URL   → <URL>  (dashboard appends /health)
+    """
+    return web_app
+
+
+@web_app.post("/predict")
 async def predict(request: AIRequest) -> AIResponse:
     """
     Main AI prediction endpoint.
@@ -756,9 +777,7 @@ async def predict(request: AIRequest) -> AIResponse:
     )
 
     # ── Final confidence guard ───────────────────────────────────────
-    # Use a low floor (0.35) — the EA applies its own min_confidence from Supabase config.
-    # The hardcoded 0.52 here was blocking trades when operator lowers threshold via dashboard.
-    MIN_CONFIDENCE = 0.35
+    MIN_CONFIDENCE = 0.52
     if confidence < MIN_CONFIDENCE:
         signal = 0; lots = sl_price = tp_price = 0.0
 
@@ -788,17 +807,7 @@ async def predict(request: AIRequest) -> AIResponse:
 
 # ── 2. TRAIN endpoint (NEW) ───────────────────────────────────────────
 
-@app.function(
-    image=image,
-    volumes={MODEL_DIR: volume},
-    secrets=[secrets],
-    timeout=120,
-    memory=1024,
-    cpu=2.0,
-    min_containers=0,   # No need to keep warm — called infrequently
-    max_containers=1,
-)
-@modal.fastapi_endpoint(method="POST", label="apex-hydracrypto-train")
+@web_app.post("/train")
 async def train(request: TrainRequest) -> TrainResponse:
     """
     Train or update the XGBoost signal classifier.
@@ -967,17 +976,7 @@ async def train(request: TrainRequest) -> TrainResponse:
 
 # ── 3. BACKTEST endpoint (NEW) ────────────────────────────────────────
 
-@app.function(
-    image=image,
-    volumes={MODEL_DIR: volume},
-    secrets=[secrets],
-    timeout=300,
-    memory=1024,
-    cpu=2.0,
-    min_containers=0,
-    max_containers=2,
-)
-@modal.fastapi_endpoint(method="POST", label="apex-hydracrypto-backtest")
+@web_app.post("/backtest")
 async def backtest(request: BacktestRequest) -> BacktestResponse:
     """
     Run the ApexHydra strategy on historical bar data.
@@ -1188,8 +1187,7 @@ async def backtest(request: BacktestRequest) -> BacktestResponse:
 
 # ── 4. Health check ───────────────────────────────────────────────────
 
-@app.function(image=image, volumes={MODEL_DIR: volume}, timeout=10)
-@modal.fastapi_endpoint(method="GET", label="apex-hydracrypto-health")
+@web_app.get("/health")
 async def health():
     model_info = {"loaded": False, "version": None, "samples": 0, "accuracy": None}
     try:

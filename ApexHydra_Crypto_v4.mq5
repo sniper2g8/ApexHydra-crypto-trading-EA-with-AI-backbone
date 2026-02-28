@@ -486,7 +486,15 @@ void CallModalAI(SSymbolData &s) {
    StringToCharArray(body, req, 0, StringLen(body));
    string headers = "Content-Type: application/json\r\n";
    string res_headers;
-   int code = WebRequest("POST", Inp_Modal_URL, headers, Inp_AI_Timeout, req, res, res_headers);
+   string predict_url = Inp_Modal_URL;
+   // Ensure the URL points to the /predict route
+   if(StringFind(predict_url, "/predict") < 0) {
+      StringTrimRight(predict_url);
+      if(StringGetCharacter(predict_url, StringLen(predict_url)-1) == '/')
+         predict_url = StringSubstr(predict_url, 0, StringLen(predict_url)-1);
+      predict_url += "/predict";
+   }
+   int code = WebRequest("POST", predict_url, headers, Inp_AI_Timeout, req, res, res_headers);
 
    if(code != 200) {
       Log(sym + " Modal AI error: HTTP " + IntegerToString(code));
