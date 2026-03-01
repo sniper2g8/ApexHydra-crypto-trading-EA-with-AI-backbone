@@ -1475,6 +1475,48 @@ async def get_commands(request: FastAPIRequest):
         return {"commands": [], "count": 0, "error": str(e)}
 
 
+# ── POST /transaction ─────────────────────────────────────────────────
+# Called by the EA (ReportTransaction) whenever MT5 fires DEAL_TYPE_BALANCE.
+# Logs deposits and withdrawals to the events table so the Telegram bot
+# can distinguish a withdrawal-driven balance drop from a trading loss.
+
+@api.post("/transaction")
+async def post_transaction(request: FastAPIRequest):
+    auth_error = await _require_auth(request)
+    if auth_error: return auth_error
+    try:
+        from supabase import create_client as _sb_client
+        body     = await request.json()
+        txn_type = str(body.get("type", "")).upper()          # DEPOSIT | WITHDRAWAL
+        amount   = float(body.get("amount", 0))
+        bal_after= float(body.get("balance_after", 0))
+        ticket   = body.get("ticket", 0)
+        evt_time = body.get("event_time", datetime.now(timezone.utc).isoformat())
+
+        if txn_type not in ("DEPOSIT", "WITHDRAWAL"):
+            return JSONResponse({"ok": False, "reason": "type must be deposit or withdrawal"}, 400)
+        if amount <= 0:
+            return JSONResponse({"ok": False, "reason": "amount must be > 0"}, 400)
+
+        icon    = "💰" if txn_type == "DEPOSIT" else "💸"
+        message = (
+            f"{icon} {txn_type}: ${amount:,.2f} | "
+            f"Balance after: ${bal_after:,.2f} | "
+            f"ticket={ticket} | ea_time={evt_time}"
+        )
+
+        sb = _sb_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+        sb.table("events").insert({
+            "type":    txn_type,
+            "message": message,
+        }).execute()
+
+        print(f"[TRANSACTION] {message}")
+        return {"ok": True, "type": txn_type, "amount": amount}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, 500)
+
+
 # ── POST /log ─────────────────────────────────────────────────────────
 
 @api.post("/log")

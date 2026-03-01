@@ -206,6 +206,28 @@ def db_get_current_regimes() -> list:
         return results
 
 
+def db_recent_withdrawal(within_minutes: int = 10) -> dict | None:
+    """
+    Returns the most recent WITHDRAWAL event from the events table if one
+    occurred within the last `within_minutes` minutes, otherwise None.
+
+    Used by the DD alert logic to suppress false alarms when a balance drop
+    is caused by a withdrawal rather than trading losses.
+    """
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(minutes=within_minutes)).isoformat()
+        r = sb.table("events") \
+              .select("type,message,timestamp") \
+              .eq("type", "WITHDRAWAL") \
+              .gte("timestamp", since) \
+              .order("timestamp", desc=True) \
+              .limit(1) \
+              .execute()
+        return r.data[0] if r.data else None
+    except Exception:
+        return None
+
+
 def db_get_trade_summary() -> list:
     try:
         r = sb.table("trade_summary").select("*").execute()
@@ -297,8 +319,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     balance    = float(perf.get("balance",       0))
     equity     = float(perf.get("equity",        0))
-    dd_frac    = float(perf.get("drawdown",      0))
-    dd         = dd_frac * 100.0          # stored as fraction (0.05 = 5%), convert to %
+    dd         = float(perf.get("drawdown",      0))
     tot_trades = int(perf.get("total_trades",    0))
     wins       = int(perf.get("wins",            0))
     losses     = int(perf.get("losses",          0))
@@ -349,7 +370,7 @@ async def cmd_perf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     balance   = float(perf.get("balance", 0))
     equity    = float(perf.get("equity", 0))
-    dd        = float(perf.get("drawdown", 0)) * 100.0   # stored as fraction, convert to %
+    dd        = float(perf.get("drawdown", 0))
     tot_t     = int(perf.get("total_trades", 0))
     wins      = int(perf.get("wins", 0))
     losses    = int(perf.get("losses", 0))
@@ -708,7 +729,7 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         perf   = db_get_latest_performance()
         balance = float(perf.get("balance", 0))
         equity  = float(perf.get("equity", 0))
-        dd      = float(perf.get("drawdown", 0)) * 100.0   # stored as fraction, convert to %
+        dd      = float(perf.get("drawdown", 0))
         tot_t   = int(perf.get("total_trades", 0))
         wins    = int(perf.get("wins", 0))
         losses  = int(perf.get("losses", 0))
@@ -754,7 +775,7 @@ async def monitor_job(ctx: ContextTypes.DEFAULT_TYPE):
         if not perf:
             return
 
-        dd         = float(perf.get("drawdown", 0)) * 100.0   # stored as fraction, convert to %
+        dd         = float(perf.get("drawdown", 0))
         is_halted  = config.get("halted", False)
         perf_ts    = perf.get("timestamp", "")
 
@@ -766,28 +787,51 @@ async def monitor_job(ctx: ContextTypes.DEFAULT_TYPE):
 
         if dd >= DD_CRITICAL_PCT:
             if dd_alerted < DD_CRITICAL_PCT or (last_dd_alert and now - last_dd_alert > cooldown):
-                msg = (
-                    f"🔴 <b>CRITICAL DRAWDOWN ALERT</b>\n"
-                    f"Current DD: <code>{dd:.2f}%</code> (threshold: <code>{DD_CRITICAL_PCT}%</code>)\n"
-                    f"Balance: <code>${float(perf.get('balance',0)):,.2f}</code>\n"
-                    f"Consider: /stop"
-                )
-                for cid in chat_ids:
-                    await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
-                _alert_state["last_dd_alert"]  = now
-                _alert_state["dd_alerted_pct"] = dd
+                # Check if a withdrawal in the last 10 min explains the balance drop
+                recent_w = db_recent_withdrawal(within_minutes=10)
+                if recent_w:
+                    # Withdrawal detected — send info message, not alarm
+                    w_msg = recent_w.get("message", "amount unknown")
+                    if not _alert_state.get("withdrawal_notified") == recent_w.get("timestamp"):
+                        msg = (
+                            f"💸 <b>Withdrawal Detected</b>\n"
+                            f"Balance dropped due to a withdrawal, not trading losses.\n"
+                            f"<i>{w_msg}</i>\n"
+                            f"Balance: <code>${float(perf.get('balance', 0)):,.2f}</code>"
+                        )
+                        for cid in chat_ids:
+                            await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
+                        _alert_state["withdrawal_notified"] = recent_w.get("timestamp")
+                    # Reset DD alert state so it re-arms cleanly after withdrawal settles
+                    _alert_state["dd_alerted_pct"] = 0.0
+                else:
+                    msg = (
+                        f"🔴 <b>CRITICAL DRAWDOWN ALERT</b>\n"
+                        f"Current DD: <code>{dd:.2f}%</code> (threshold: <code>{DD_CRITICAL_PCT}%</code>)\n"
+                        f"Balance: <code>${float(perf.get('balance',0)):,.2f}</code>\n"
+                        f"Consider: /stop"
+                    )
+                    for cid in chat_ids:
+                        await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
+                    _alert_state["last_dd_alert"]  = now
+                    _alert_state["dd_alerted_pct"] = dd
 
         elif dd >= DD_ALERT_PCT:
             if dd_alerted < DD_ALERT_PCT or (last_dd_alert and now - last_dd_alert > cooldown):
-                msg = (
-                    f"🟠 <b>Drawdown Warning</b>\n"
-                    f"Current DD: <code>{dd:.2f}%</code> (alert at <code>{DD_ALERT_PCT}%</code>)\n"
-                    f"Balance: <code>${float(perf.get('balance',0)):,.2f}</code>"
-                )
-                for cid in chat_ids:
-                    await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
-                _alert_state["last_dd_alert"]  = now
-                _alert_state["dd_alerted_pct"] = dd
+                recent_w = db_recent_withdrawal(within_minutes=10)
+                if recent_w:
+                    # Withdrawal — already handled above or will be caught next tick
+                    _alert_state["dd_alerted_pct"] = 0.0
+                else:
+                    msg = (
+                        f"🟠 <b>Drawdown Warning</b>\n"
+                        f"Current DD: <code>{dd:.2f}%</code> (alert at <code>{DD_ALERT_PCT}%</code>)\n"
+                        f"Balance: <code>${float(perf.get('balance',0)):,.2f}</code>"
+                    )
+                    for cid in chat_ids:
+                        await ctx.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
+                    _alert_state["last_dd_alert"]  = now
+                    _alert_state["dd_alerted_pct"] = dd
 
         else:
             # Reset dd alert state when dd returns to normal
@@ -865,7 +909,7 @@ async def daily_summary_job(ctx: ContextTypes.DEFAULT_TYPE):
 
         balance  = float(perf.get("balance", 0))
         equity   = float(perf.get("equity", 0))
-        dd       = float(perf.get("drawdown", 0)) * 100.0   # stored as fraction, convert to %
+        dd       = float(perf.get("drawdown", 0))
         tot_t    = int(perf.get("total_trades", 0))
         wins     = int(perf.get("wins", 0))
         losses   = int(perf.get("losses", 0))
