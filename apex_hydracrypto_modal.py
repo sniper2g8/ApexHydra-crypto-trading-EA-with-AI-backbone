@@ -100,7 +100,6 @@ _REGIME_HISTORY: dict      = {}     # symbol → deque[(datetime, regime_str)]
 _REGIME_HISTORY_MAXLEN     = 30
 _CONTAINER_START: datetime = datetime.now(timezone.utc)
 _MR_WARMUP_SECS            = 900    # 15 min warm-up before MR is fully trusted
-_seeded_symbols: set       = set()
 
 # ──────────────────────────────────────────────────────────────────────
 #  SCHEMAS
@@ -424,8 +423,6 @@ def build_features(p: AIRequest) -> tuple[np.ndarray, dict]:
     # ── Time encoding (24/7 crypto, but volume patterns exist) ────────
     h_sin = math.sin(2 * math.pi * p.hour / 24)
     h_cos = math.cos(2 * math.pi * p.hour / 24)
-    d_sin = math.sin(2 * math.pi * p.dow  / 7)
-    d_cos = math.cos(2 * math.pi * p.dow  / 7)
     # Crypto high-volume window: 13-21 UTC (US session overlap)
     peak_session = 1.0 if 13 <= p.hour < 21 else 0.0
 
@@ -436,8 +433,6 @@ def build_features(p: AIRequest) -> tuple[np.ndarray, dict]:
     hist_bias = _compute_history_bias(p.recent_signals, p.recent_outcomes, p.recent_regimes)
 
     # ── Interaction terms ─────────────────────────────────────────────
-    trend_x_dir   = adx_norm * di_diff
-    rsi_x_macd    = rsi_norm * macd_norm
     ema_x_htf     = ema_align * htf_bias
 
     features = np.array([

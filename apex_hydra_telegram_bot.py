@@ -297,7 +297,8 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     balance    = float(perf.get("balance",       0))
     equity     = float(perf.get("equity",        0))
-    dd         = float(perf.get("drawdown",      0))
+    dd_frac    = float(perf.get("drawdown",      0))
+    dd         = dd_frac * 100.0          # stored as fraction (0.05 = 5%), convert to %
     tot_trades = int(perf.get("total_trades",    0))
     wins       = int(perf.get("wins",            0))
     losses     = int(perf.get("losses",          0))
@@ -348,7 +349,7 @@ async def cmd_perf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     balance   = float(perf.get("balance", 0))
     equity    = float(perf.get("equity", 0))
-    dd        = float(perf.get("drawdown", 0))
+    dd        = float(perf.get("drawdown", 0)) * 100.0   # stored as fraction, convert to %
     tot_t     = int(perf.get("total_trades", 0))
     wins      = int(perf.get("wins", 0))
     losses    = int(perf.get("losses", 0))
@@ -707,7 +708,7 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         perf   = db_get_latest_performance()
         balance = float(perf.get("balance", 0))
         equity  = float(perf.get("equity", 0))
-        dd      = float(perf.get("drawdown", 0))
+        dd      = float(perf.get("drawdown", 0)) * 100.0   # stored as fraction, convert to %
         tot_t   = int(perf.get("total_trades", 0))
         wins    = int(perf.get("wins", 0))
         losses  = int(perf.get("losses", 0))
@@ -753,7 +754,7 @@ async def monitor_job(ctx: ContextTypes.DEFAULT_TYPE):
         if not perf:
             return
 
-        dd         = float(perf.get("drawdown", 0))
+        dd         = float(perf.get("drawdown", 0)) * 100.0   # stored as fraction, convert to %
         is_halted  = config.get("halted", False)
         perf_ts    = perf.get("timestamp", "")
 
@@ -864,7 +865,7 @@ async def daily_summary_job(ctx: ContextTypes.DEFAULT_TYPE):
 
         balance  = float(perf.get("balance", 0))
         equity   = float(perf.get("equity", 0))
-        dd       = float(perf.get("drawdown", 0))
+        dd       = float(perf.get("drawdown", 0)) * 100.0   # stored as fraction, convert to %
         tot_t    = int(perf.get("total_trades", 0))
         wins     = int(perf.get("wins", 0))
         losses   = int(perf.get("losses", 0))
