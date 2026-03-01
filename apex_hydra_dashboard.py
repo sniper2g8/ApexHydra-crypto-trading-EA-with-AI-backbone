@@ -152,9 +152,15 @@ def ea_logs(limit=100):
     if not DB_OK: return pd.DataFrame()
     try:
         df = _df(supabase.table("ea_logs").select("*").order("logged_at",desc=True).limit(limit).execute())
-        if not df.empty: _ts(df,"logged_at")
+        if df.empty: return df
+        # Parse timestamps — coerce bad values to NaT instead of crashing
+        for col in ("logged_at", "ea_time"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
         return df
-    except: return pd.DataFrame()
+    except Exception as _ea_log_err:
+        st.caption(f"⚠️ ea_logs error: {_ea_log_err}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=30)
 def fwd_test():
@@ -430,17 +436,9 @@ with T[2]:
         if not ts_df.empty:
             fmt={c:(f"{{:.1f}}%" if c=="win_rate_pct" else "${:.2f}" if c=="total_pnl" else "{:.3f}")
                  for c in ["win_rate_pct","total_pnl","avg_ai_score","avg_confidence"] if c in ts_df.columns}
-            def _wr_color(v):
-                try:
-                    v = float(v)
-                    if v >= 60: return "background-color:#dcfce7;color:#16a34a"
-                    elif v >= 50: return "background-color:#fef9c3;color:#d97706"
-                    else: return "background-color:#fee2e2;color:#dc2626"
-                except: return ""
-            styled = ts_df.style.format(fmt)
-            if "win_rate_pct" in ts_df.columns:
-                styled = styled.map(_wr_color, subset=["win_rate_pct"])
-            st.dataframe(styled, use_container_width=True, hide_index=True)
+            st.dataframe(ts_df.style.background_gradient(
+                subset=["win_rate_pct"] if "win_rate_pct" in ts_df.columns else [],cmap="RdYlGn").format(fmt),
+                use_container_width=True, hide_index=True)
         else: ibox("Per-symbol stats appear after the first closed trade.")
     with cb:
         st.subheader("Win Rate Trend")
@@ -507,10 +505,18 @@ with T[5]:
     LC={"ERROR":"#dc2626","WARN":"#d97706","INFO":"#2563eb","DEBUG":"#64748b"}
     eals=ea_logs(100)
     if not eals.empty:
+        st.caption(f"{len(eals)} log entries — latest first")
         for _,row in eals.iterrows():
             lvl=str(row.get("level","INFO")).upper()
-            ts=row["logged_at"].strftime("%H:%M:%S") if pd.notna(row.get("logged_at")) else "—"
-            sym=str(row.get("symbol",""))
+            ts_val=row.get("logged_at")
+            if ts_val is not None and pd.notna(ts_val):
+                try: ts=pd.Timestamp(ts_val).strftime("%m/%d %H:%M:%S")
+                except: ts=str(ts_val)[:19]
+            else:
+                ts_val2=row.get("ea_time")
+                try: ts=pd.Timestamp(ts_val2).strftime("%m/%d %H:%M:%S") if ts_val2 and pd.notna(ts_val2) else "—"
+                except: ts=str(ts_val2)[:19] if ts_val2 else "—"
+            sym=str(row.get("symbol") or "")
             col=LC.get(lvl,"#8b949e")
             msg=str(row.get("message",""))[:160]
             sym_s=f'<span style="color:#d97706;min-width:65px;">{sym}</span>' if sym else ""
@@ -520,14 +526,14 @@ with T[5]:
                         f'{sym_s}<span style="color:#374151;font-size:.78rem;">{msg}</span></div>',
                         unsafe_allow_html=True)
     else:
-        ibox("ℹ️ EA logs stream here once running. EA writes via Modal <code>/log</code> endpoint.<br>"
-             "Ensure <code>Inp_DB_Enable=true</code>.","blue")
+        ibox("ℹ️ EA logs stream here once running.","blue")
         ev_fb=events(20)
         if not ev_fb.empty:
             st.subheader("Events (fallback)")
             for _,row in ev_fb.iterrows():
                 t=str(row.get("type","INFO"))
-                ts=row["timestamp"].strftime("%H:%M:%S") if pd.notna(row.get("timestamp")) else "—"
+                try: ts=pd.Timestamp(row["timestamp"]).strftime("%H:%M:%S") if pd.notna(row.get("timestamp")) else "—"
+                except: ts="—"
                 ev_row(ts,t,row.get("message",""),TCOL.get(t,"#8b949e"))
 
 # ── T6 Telegram ────────────────────────────────────────────────────────
