@@ -128,7 +128,6 @@ struct SConfig {
    double   max_dd_pct;
    int      max_positions;
    double   min_confidence;
-   double   allocated_capital;   // effective capital for lot sizing (0 = full balance)
    bool     halted;
    bool     paused;
    datetime last_pull;
@@ -176,13 +175,12 @@ int OnInit() {
    g_peak_equity   = AccountInfoDouble(ACCOUNT_EQUITY);
 
    // Default config from inputs
-   g_cfg.risk_pct          = Inp_Risk_Pct;
-   g_cfg.max_dd_pct        = Inp_MaxDD_Pct;
-   g_cfg.max_positions     = Inp_Max_Pos;
-   g_cfg.min_confidence    = Inp_Min_Conf;
-   g_cfg.allocated_capital = 0.0;   // 0 = use full balance; updated by PullConfig()
-   g_cfg.halted            = false;
-   g_cfg.paused            = false;
+   g_cfg.risk_pct       = Inp_Risk_Pct;
+   g_cfg.max_dd_pct     = Inp_MaxDD_Pct;
+   g_cfg.max_positions  = Inp_Max_Pos;
+   g_cfg.min_confidence = Inp_Min_Conf;
+   g_cfg.halted         = false;
+   g_cfg.paused         = false;
 
    if(!ParseSymbols()) { Alert("No valid symbols!"); return INIT_FAILED; }
    RestorePositions();   // re-link any already-open positions so reinit doesn't duplicate them
@@ -506,36 +504,24 @@ bool CollectIndicators(SSymbolData &s) {
 //═══════════════════════════════════════════════════════════════════
 
 //  Map a symbol like "BTCUSD" → {"USD"} or "EURUSD" → {"EUR","USD"}
-//  Handles both 3-char (BTC, ETH) and 4-char (AVAX) crypto bases by
-//  detecting the crypto base first and deriving the quote from the remainder.
 void GetSymbolCurrencies(const string sym, string &currencies[]) {
-   // Strip broker suffix (lowercase/uppercase m) to get clean symbol
-   string clean = sym;
-   int    clen  = StringLen(clean);
-   if(clen > 1) {
-      string last = StringSubstr(clean, clen - 1, 1);
-      if(last == "m" || last == "M") clean = StringSubstr(clean, 0, clen - 1);
+   // Crypto: only quote currency matters (USD)
+   string base = StringSubstr(sym, 0, 3);
+   string quote = StringSubstr(sym, 3, 3);
+   // Common crypto bases — treat as non-fiat, only flag quote events
+   string cryptoBases[] = {"BTC","ETH","SOL","BNB","XRP","ADA","DOT","AVA","LTC","DOGE"};
+   bool isCrypto = false;
+   for(int i = 0; i < ArraySize(cryptoBases); i++)
+      if(base == cryptoBases[i]) { isCrypto = true; break; }
+
+   if(isCrypto) {
+      ArrayResize(currencies, 1);
+      currencies[0] = quote;
+   } else {
+      ArrayResize(currencies, 2);
+      currencies[0] = base;
+      currencies[1] = quote;
    }
-
-   // Known crypto bases with their exact character length
-   string cryptoBases[] = {"AVAX","BTC","ETH","SOL","BNB","XRP","ADA","DOT","LTC","DOGE","MATIC","LINK","UNI","ATOM"};
-   int    baseLens[]    = {4,     3,    3,    3,    3,    3,    3,    3,    3,    4,     5,     4,    3,    4};
-
-   for(int i = 0; i < ArraySize(cryptoBases); i++) {
-      int blen = baseLens[i];
-      if(StringLen(clean) > blen && StringSubstr(clean, 0, blen) == cryptoBases[i]) {
-         // Crypto symbol — only flag the quote currency (e.g. "USD")
-         string quote = StringSubstr(clean, blen, 3);
-         ArrayResize(currencies, 1);
-         currencies[0] = quote;
-         return;
-      }
-   }
-
-   // Non-crypto: standard 6-char forex pair
-   ArrayResize(currencies, 2);
-   currencies[0] = StringSubstr(clean, 0, 3);
-   currencies[1] = StringSubstr(clean, 3, 3);
 }
 
 int GetNewsMinutesAway(const string sym) {
@@ -610,28 +596,16 @@ void CallModalAI(SSymbolData &s) {
       vols   += DoubleToString((double)iTickVolume(sym,Inp_TF,b),0) + sep;
    }
 
-   // Build history arrays — send in chronological order (oldest first).
-   // The circular buffer writes at hist_idx % 20. After 20 entries the buffer
-   // wraps, so the oldest entry is at hist_idx % 20 and we must rotate before
-   // sending, otherwise the Python-side exponential weight (oldest→lowest) is
-   // applied to the wrong entries.
+   // Build history arrays
    int h_cnt = MathMin(s.hist_idx, 20);
    string h_sigs="[", h_pnls="[", h_regs="[";
    for(int i = 0; i < h_cnt; i++) {
-      // Rotate: oldest = hist_idx % 20 when buffer is full (hist_idx >= 20)
-      int src = (s.hist_idx >= 20) ? ((s.hist_idx + i) % 20) : i;
       string sep = (i < h_cnt-1) ? "," : "";
-      h_sigs += IntegerToString(s.hist_signals[src]) + sep;
-      h_pnls += DoubleToString(s.hist_pnl[src],2)   + sep;
-      h_regs += IntegerToString(s.hist_regimes[src]) + sep;
+      h_sigs += IntegerToString(s.hist_signals[i]) + sep;
+      h_pnls += DoubleToString(s.hist_pnl[i],2)   + sep;
+      h_regs += IntegerToString(s.hist_regimes[i]) + sep;
    }
    h_sigs+="]"; h_pnls+="]"; h_regs+="]";
-
-   // Resolve hour and day-of-week BEFORE StringFormat — MQL5 forbids declarations inside function calls
-   MqlDateTime _dt;
-   TimeToStruct(TimeCurrent(), _dt);
-   int cur_hour = _dt.hour;
-   int cur_dow  = _dt.day_of_week;
 
    // JSON payload
    string body = StringFormat(
@@ -639,7 +613,6 @@ void CallModalAI(SSymbolData &s) {
       "\"symbol\":\"%s\",\"timeframe\":\"%s\",\"magic\":%d,"
       "\"timestamp\":\"%s\","
       "\"account_balance\":%.2f,\"account_equity\":%.2f,"
-      "\"allocated_capital\":%.2f,"
       "\"risk_pct\":%.2f,\"max_positions\":%d,\"open_positions\":%d,"
       "\"bars\":{\"open\":[%s],\"high\":[%s],\"low\":[%s],\"close\":[%s],\"volume\":[%s]},"
       "\"atr\":%.5f,\"atr_avg\":%.5f,\"adx\":%.2f,\"plus_di\":%.2f,\"minus_di\":%.2f,"
@@ -649,15 +622,12 @@ void CallModalAI(SSymbolData &s) {
       "\"tick_value\":%.5f,\"tick_size\":%.5f,"
       "\"min_lot\":%.2f,\"max_lot\":%.2f,\"lot_step\":%.2f,"
       "\"point\":%.5f,\"digits\":%d,"
-      "\"spread\":%.2f,\"bid\":%.5f,\"ask\":%.5f,"
-      "\"hour\":%d,\"dow\":%d,"
       "\"recent_signals\":%s,\"recent_outcomes\":%s,\"recent_regimes\":%s,"
       "\"news_blackout\":%s,\"news_minutes_away\":%d,\"news_buffer_minutes\":%d"
       "}",
       sym, EnumToString(Inp_TF), Inp_Magic,
       TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
       AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
-      g_cfg.allocated_capital,
       g_cfg.risk_pct, g_cfg.max_positions, CountOpenPos(),
       opens, highs, lows, closes, vols,
       s.atr, s.atr_avg, s.adx, s.plus_di, s.minus_di,
@@ -671,11 +641,6 @@ void CallModalAI(SSymbolData &s) {
       SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP),
       SymbolInfoDouble(sym, SYMBOL_POINT),
       (int)SymbolInfoInteger(sym, SYMBOL_DIGITS),
-      // Spread in points, bid, ask — needed for spread penalty and feature encoding
-      SymbolInfoInteger(sym, SYMBOL_SPREAD) * 1.0,
-      SymbolInfoDouble(sym, SYMBOL_BID),
-      SymbolInfoDouble(sym, SYMBOL_ASK),
-      cur_hour, cur_dow,
       h_sigs, h_pnls, h_regs,
       (news_mins < Inp_News_Buffer_Min ? "true" : "false"),
       news_mins,
@@ -927,16 +892,14 @@ void CheckRisk() {
 }
 
 void PullStats() {
-   // Seed in-memory counters from the last performance snapshot so EA restarts
-   // don't zero out live_trades/wins/losses/pnl on the dashboard.
-   // Reads: performance table (total_trades, wins, losses, total_pnl)
-   // Also reads open trade count from trades table (action=OPEN, no closed_at)
+   // Seed in-memory counters from DB so EA restarts don't zero the dashboard.
+   // NOTE: performance table has no magic column — query without filter,
+   // get the latest row (single EA system so this is correct).
    if(!Inp_DB_Enable) return;
 
    // ── 1. Pull last performance row ──────────────────────────────────
    string url = Inp_DB_URL + "/rest/v1/performance"
-              + "?magic=eq." + IntegerToString(Inp_Magic)
-              + "&order=timestamp.desc&limit=1";
+              + "?order=timestamp.desc&limit=1";
    string headers = "apikey: " + Inp_DB_Key + "\r\nAuthorization: Bearer " + Inp_DB_Key + "\r\n";
    char req[], res[];
    string res_hdr;
@@ -944,19 +907,43 @@ void PullStats() {
    if(code == 200) {
       string json = CharArrayToString(res);
       if(StringFind(json, "total_trades") >= 0) {
-         int   t = (int)JSONGetInt(json, "total_trades");
-         int   w = (int)JSONGetInt(json, "wins");
-         int   l = (int)JSONGetInt(json, "losses");
-         double p = JSONGetDbl(json, "total_pnl");
-         // Only seed if DB has more trades than we counted (handles fresh restarts)
+         int    t = (int)JSONGetInt(json, "total_trades");
+         int    w = (int)JSONGetInt(json, "wins");
+         int    l = (int)JSONGetInt(json, "losses");
+         double p = JSONGetDbl(json,      "total_pnl");
          if(t > g_total_trades) {
             g_total_trades = t;
             g_total_wins   = w;
             g_total_losses = l;
             g_total_pnl    = p;
-            Log("Stats restored from DB: " + IntegerToString(t) + " trades, " +
-                IntegerToString(w) + "W/" + IntegerToString(l) + "L, PnL=$" +
-                DoubleToString(p, 2));
+            Log("Stats restored from performance table: " + IntegerToString(t) + " trades, " +
+                IntegerToString(w) + "W/" + IntegerToString(l) + "L, PnL=$" + DoubleToString(p,2));
+            return;
+         }
+      }
+   }
+
+   // ── 2. Fallback: read live_* fields from ea_config ────────────────
+   // These are patched on every tick so survive restarts better than
+   // performance table which is only written every 15s.
+   string url2 = Inp_DB_URL + "/rest/v1/ea_config?magic=eq." + IntegerToString(Inp_Magic) + "&limit=1";
+   char req2[], res2[];
+   string res_hdr2;
+   int code2 = WebRequest("GET", url2, headers, 5000, req2, res2, res_hdr2);
+   if(code2 == 200) {
+      string json2 = CharArrayToString(res2);
+      if(StringFind(json2, "live_trades") >= 0) {
+         int    t = (int)JSONGetInt(json2, "live_trades");
+         int    w = (int)JSONGetInt(json2, "live_wins");
+         int    l = (int)JSONGetInt(json2, "live_losses");
+         double p = JSONGetDbl(json2,      "live_pnl");
+         if(t > g_total_trades) {
+            g_total_trades = t;
+            g_total_wins   = w;
+            g_total_losses = l;
+            g_total_pnl    = p;
+            Log("Stats restored from ea_config live fields: " + IntegerToString(t) + " trades, " +
+                IntegerToString(w) + "W/" + IntegerToString(l) + "L, PnL=$" + DoubleToString(p,2));
          }
       }
    }
@@ -978,19 +965,6 @@ void PullConfig() {
       v = JSONGetDbl(json,"max_dd_pct");          if(v > 0) g_cfg.max_dd_pct = v;
       int iv = (int)JSONGetInt(json,"max_positions"); if(iv > 0) g_cfg.max_positions = iv;
       v = JSONGetDbl(json,"min_confidence");      if(v > 0) g_cfg.min_confidence = v;
-
-      // Capital allocation — compute effective allocated_capital to send Modal
-      // Dashboard sets trading_capital ($) and capital_pct (%) in ea_config.
-      // EA reads both and sends the effective allocation to Modal for lot sizing.
-      double tc  = JSONGetDbl(json, "trading_capital");
-      double cp  = JSONGetDbl(json, "capital_pct");
-      if(tc > 0) {
-         double pct = (cp > 0 && cp <= 100) ? cp : 100.0;
-         g_cfg.allocated_capital = tc * pct / 100.0;
-      } else {
-         g_cfg.allocated_capital = 0.0;  // 0 = full balance (handled in Modal)
-      }
-
       // Remote halt/pause from Streamlit dashboard
       string halt_str = JSONGetStr(json,"halted");
       if(halt_str == "true")  g_cfg.halted = true;
@@ -1120,12 +1094,11 @@ void DBSyncPerformance(bool final_snap) {
       "{\"balance\":%.2f,\"equity\":%.2f,\"drawdown\":%.4f,"
       "\"total_trades\":%d,\"wins\":%d,\"losses\":%d,"
       "\"total_pnl\":%.2f,\"global_accuracy\":%.4f,"
-      "\"halted\":%s,\"final\":%s,\"magic\":%d,\"timestamp\":\"%s\"}",
+      "\"halted\":%s,\"final\":%s,\"timestamp\":\"%s\"}",
       bal, eq, g_dd_pct / 100.0,
       g_total_trades, g_total_wins, g_total_losses, g_total_pnl, acc,
       (g_cfg.halted ? "true" : "false"),
       (final_snap   ? "true" : "false"),
-      Inp_Magic,
       ts
    );
    DBPost("performance", json);
