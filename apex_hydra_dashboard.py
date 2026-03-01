@@ -190,10 +190,10 @@ RC = {"Trend Bull":"#16a34a","Trend Bear":"#dc2626","Ranging":"#d97706",
 "TRENDING":"#16a34a","RANGING":"#d97706","VOLATILE":"#ea580c"}
 
 def kpi(col, label, value, sub="", color="kpi-neu"):
-col.markdown(f’<div class="kpi-card"><div class="kpi-label">{label}</div>’
-f’<div class="kpi-val {color}">{value}</div>’
-+ (f’<div class="kpi-sub">{sub}</div>’ if sub else "")
-+ ‘</div>’, unsafe_allow_html=True)
+col.markdown(f'<div class="kpi-card"><div class="kpi-label">{label}</div>'
+f'<div class="kpi-val {color}">{value}</div>'
++ (f'<div class="kpi-sub">{sub}</div>' if sub else "")
++ ‘</div>', unsafe_allow_html=True)
 
 def dark(fig, title="", h=340):
 fig.update_layout(template="plotly_white",paper_bgcolor="#ffffff",plot_bgcolor="#f8f9fc",
@@ -203,7 +203,7 @@ return fig
 
 def ibox(text, kind=""):
 extra = f" ibox-{kind}" if kind else ""
-st.markdown(f’<div class="ibox{extra}">{text}</div>’, unsafe_allow_html=True)
+st.markdown(f'<div class="ibox{extra}">{text}</div>', unsafe_allow_html=True)
 
 ICONS = {"HALT":"⛔","RESUME":"▶️","OPEN":"📈","CLOSE":"📉","ERROR":"❌","INFO":"ℹ️","DEINIT":"🔌"}
 TCOL  = {"HALT":"#dc2626","ERROR":"#dc2626","RESUME":"#16a34a","OPEN":"#16a34a",
@@ -211,10 +211,10 @@ TCOL  = {"HALT":"#dc2626","ERROR":"#dc2626","RESUME":"#16a34a","OPEN":"#16a34a",
 
 def ev_row(ts_str, type_str, msg_str, color="#8b949e"):
 st.markdown(
-f’<div class="ev-row" style="border-left-color:{color};">’
-f’<span class="ev-ts">{ts_str}</span>’
-f’<span class="ev-type" style="color:{color};">{ICONS.get(type_str,"•")} {type_str}</span>’
-f’<span style="color:#374151;font-size:.78rem;">{str(msg_str)[:130]}</span></div>’,
+f'<div class="ev-row" style="border-left-color:{color};">'
+f'<span class="ev-ts">{ts_str}</span>'
+f'<span class="ev-type" style="color:{color};">{ICONS.get(type_str,"•")} {type_str}</span>'
+f'<span style="color:#374151;font-size:.78rem;">{str(msg_str)[:130]}</span></div>',
 unsafe_allow_html=True)
 
 # ── Sidebar ────────────────────────────────────────────────────────────
@@ -222,9 +222,9 @@ unsafe_allow_html=True)
 with st.sidebar:
 st.markdown("## ⚡ ApexHydra v4.0")
 if DB_OK:
-st.markdown(’<div style="background:#f0fdf4;border:1px solid #16a34a;border-radius:8px;padding:8px 14px;font-size:.82rem;color:#16a34a;">🟢 Supabase connected</div>’, unsafe_allow_html=True)
+st.markdown('<div style="background:#f0fdf4;border:1px solid #16a34a;border-radius:8px;padding:8px 14px;font-size:.82rem;color:#16a34a;">🟢 Supabase connected</div>', unsafe_allow_html=True)
 else:
-st.markdown(f’<div style="background:#fef2f2;border:1px solid #dc2626;border-radius:8px;padding:8px 14px;font-size:.82rem;color:#dc2626;">🔴 {DB_ERR[:80]}</div>’, unsafe_allow_html=True)
+st.markdown(f'<div style="background:#fef2f2;border:1px solid #dc2626;border-radius:8px;padding:8px 14px;font-size:.82rem;color:#dc2626;">🔴 {DB_ERR[:80]}</div>', unsafe_allow_html=True)
 st.info("Check SUPABASE_URL + SUPABASE_KEY in .streamlit/secrets.toml")
 st.stop()
 
@@ -325,12 +325,12 @@ cfg_data  = cfg()
 H1,H2 = st.columns([4,1])
 with H1:
 st.markdown("# ⚡ ApexHydra Crypto v4.0")
-st.markdown(f"<span style='color:#64748b;font-size:.85rem;'>{datetime.now(timezone.utc).strftime(’%Y-%m-%d %H:%M:%S UTC’)}</span>", unsafe_allow_html=True)
+st.markdown(f"<span style='color:#64748b;font-size:.85rem;'>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</span>", unsafe_allow_html=True)
 with H2:
 if cfg_data:
 bc = "badge-halted" if cfg_data.get("halted") else ("badge-paused" if cfg_data.get("paused") else "badge-active")
 bl = "⛔ HALTED"   if cfg_data.get("halted") else ("⏸ PAUSED"    if cfg_data.get("paused") else "▶ ACTIVE")
-st.markdown(f’<br><span class="badge {bc}" style="font-size:.9rem;padding:7px 18px;">{bl}</span>’, unsafe_allow_html=True)
+st.markdown(f'<br><span class="badge {bc}" style="font-size:.9rem;padding:7px 18px;">{bl}</span>', unsafe_allow_html=True)
 st.markdown("—")
 
 # ── KPI row ────────────────────────────────────────────────────────────
@@ -355,7 +355,7 @@ render_kpis(float(cfg_data.get("live_balance",0) or 0), float(cfg_data.get("live
 float(cfg_data.get("live_dd_pct",0) or 0),
 int(cfg_data.get("live_trades",0) or 0),   int(cfg_data.get("live_wins",0) or 0),
 float(cfg_data.get("live_pnl",0) or 0),
-f"⚡ live · {cfg_data.get(‘live_ts’,’?’)}")
+f"⚡ live · {cfg_data.get(‘live_ts','?')}")
 elif not perf_df.empty:
 l = perf_df.iloc[-1]
 render_kpis(float(l.get("balance",0) or 0), float(l.get("equity",0) or 0),
@@ -364,11 +364,11 @@ int(l.get("total_trades",0) or 0), int(l.get("wins",0) or 0),
 float(l.get("total_pnl",0) or 0), "⚠️ last snapshot (EA offline)")
 else:
 for col in kpis:
-col.markdown(’<div class="kpi-card"><div class="kpi-label">—</div>’
-‘<div class="kpi-val" style="color:#94a3b8;font-size:2rem;">—</div></div>’,
+col.markdown('<div class="kpi-card"><div class="kpi-label">—</div>'
+‘<div class="kpi-val" style="color:#94a3b8;font-size:2rem;">—</div></div>',
 unsafe_allow_html=True)
 reason = ("No ea_config row — set <code>Inp_DB_Enable=true</code> in EA inputs" if cfg_data is None
-else "EA hasn’t sent live data yet — wait 15–30s after EA starts (check AutoTrading is ON)"
+else "EA hasn't sent live data yet — wait 15–30s after EA starts (check AutoTrading is ON)"
 if not (cfg_data or {}).get("live_balance")
 else "No performance snapshots yet")
 ibox(f"⚠️ <b>No live data yet</b> — {reason}","yellow")# Capital budget banner
@@ -404,7 +404,7 @@ st.plotly_chart(dark(fig2,"Drawdown %",200), use_container_width=True)
 s1,s2,s3,s4 = st.columns(4)
 sb=float(ps.iloc[0]["balance"] or 0); eb=float(ps.iloc[-1]["balance"] or 0)
 s1.metric("Start Balance",f"${sb:,.2f}"); s2.metric("Current",f"${eb:,.2f}")
-s3.metric("Return",f"{((eb-sb)/sb*100 if sb>0 else 0):+.2f}%"); s4.metric("Max DD",f"{float(ps[‘drawdown’].max() or 0)*100:.2f}%")
+s3.metric("Return",f"{((eb-sb)/sb*100 if sb>0 else 0):+.2f}%"); s4.metric("Max DD",f"{float(ps[‘drawdown'].max() or 0)*100:.2f}%")
 else:
 ibox("📊 No performance snapshots yet. Ensure <code>Inp_DB_Enable=true</code> in EA inputs.","yellow")
 
@@ -419,11 +419,11 @@ if not rd.empty:
 for _,row in rd.iterrows():
 r=str(row.get("regime","Undefined")); col=RC.get(r,"#8b949e")
 ts=row["timestamp"].strftime("%H:%M") if pd.notna(row.get("timestamp")) else "—"
-st.markdown(f’<div class="rrow" style="border-left:3px solid {col};">’
-f’<b style="color:#1a1a2e;min-width:80px;">{row.get("symbol","?")}</b>’
-f’<span style="color:{col};font-weight:600;min-width:130px;">{r}</span>’
-f’<span style="color:#64748b;font-size:.76rem;">Conf:{float(row.get("confidence",0) or 0)*100:.0f}% ’
-f’ADX:{row.get("adx","—")} RSI:{row.get("rsi","—")} {ts}</span></div>’,
+st.markdown(f'<div class="rrow" style="border-left:3px solid {col};">'
+f'<b style="color:#1a1a2e;min-width:80px;">{row.get("symbol","?")}</b>'
+f'<span style="color:{col};font-weight:600;min-width:130px;">{r}</span>'
+f'<span style="color:#64748b;font-size:.76rem;">Conf:{float(row.get("confidence",0) or 0)*100:.0f}% '
+f'ADX:{row.get("adx","—")} RSI:{row.get("rsi","—")} {ts}</span></div>',
 unsafe_allow_html=True)
 else: ibox("No live regime data — waiting for EA scans.")
 with c2:
@@ -521,7 +521,7 @@ if not rc2.empty:
 for _,row in rc2.iterrows():
 r=str(row.get("regime","Undefined")); col=RC.get(r,"#8b949e")
 ts=row["timestamp"].strftime("%m/%d %H:%M") if pd.notna(row.get("timestamp")) else "—"
-ev_row(ts,row.get("symbol","?"),f"{r} | ADX:{row.get(‘adx’,’—’)} RSI:{row.get(‘rsi’,’—’)}",col)
+ev_row(ts,row.get("symbol","?"),f"{r} | ADX:{row.get(‘adx','—')} RSI:{row.get(‘rsi','—')}",col)
 else: ibox("No regime changes recorded yet.")
 
 # ── T5 EA Logs ─────────────────────────────────────────────────────────
@@ -545,11 +545,11 @@ except: ts=str(ts_val2)[:19] if ts_val2 else "—"
 sym=str(row.get("symbol") or "")
 col=LC.get(lvl,"#8b949e")
 msg=str(row.get("message",""))[:160]
-sym_s=f’<span style="color:#d97706;min-width:65px;">{sym}</span>’ if sym else ""
-st.markdown(f’<div class="ev-row" style="border-left-color:{col};">’
-f’<span class="ev-ts">{ts}</span>’
-f’<span class="ev-type" style="color:{col};">[{lvl}]</span>’
-f’{sym_s}<span style="color:#374151;font-size:.78rem;">{msg}</span></div>’,
+sym_s=f'<span style="color:#d97706;min-width:65px;">{sym}</span>' if sym else ""
+st.markdown(f'<div class="ev-row" style="border-left-color:{col};">'
+f'<span class="ev-ts">{ts}</span>'
+f'<span class="ev-type" style="color:{col};">[{lvl}]</span>'
+f'{sym_s}<span style="color:#374151;font-size:.78rem;">{msg}</span></div>',
 unsafe_allow_html=True)
 else:
 ibox("ℹ️ EA logs stream here once running.","blue")
@@ -623,7 +623,7 @@ payload={"symbol":bsym,"timeframe":btf,"bars":df_bt[REQ].fillna(0).to_dict("reco
 "initial_balance":bbal,"risk_pct":brisk,"min_rr":brr,"min_confidence":bconf,
 "spread_points":bsp,"tick_value":btv,"tick_size":bts,"min_lot":.01,"max_lot":100.,"lot_step":.01,"point":bts,"digits":2}
 try:
-r=requests.post(f"{MU.rstrip(’/’)}/backtest",json=payload,timeout=120)
+r=requests.post(f"{MU.rstrip('/')}/backtest",json=payload,timeout=120)
 if r.status_code==200: st.session_state["bt"]=r.json()
 else: st.error(f"{r.status_code}: {r.text[:200]}")
 except Exception as e: st.error(str(e))
@@ -635,11 +635,11 @@ res=st.session_state["bt"]; st.markdown("—"); st.markdown("### Results")
 m1,m2,m3,m4,m5,m6,m7=st.columns(7)
 def bk(c,l,v,g=None):
 col="#16a34a" if g is True else("#dc2626" if g is False else "#2563eb")
-c.markdown(f’<div class="kpi-card"><div class="kpi-label">{l}</div><div class="kpi-val" style="color:{col};font-size:1.1rem;">{v}</div></div>’,unsafe_allow_html=True)
-bk(m1,"Trades",res["total_trades"]); bk(m2,"Win Rate",f"{res[‘win_rate’]*100:.1f}%",res[‘win_rate’]>=.5)
-bk(m3,"PnL",f"${res[‘total_pnl’]:+,.2f}",res[‘total_pnl’]>=0); bk(m4,"Max DD",f"{res[‘max_drawdown_pct’]:.1f}%",res[‘max_drawdown_pct’]<=15)
-bk(m5,"Sharpe",f"{res[‘sharpe_ratio’]:.2f}",res[‘sharpe_ratio’]>=1.); bk(m6,"PF",f"{res[‘profit_factor’]:.2f}",res[‘profit_factor’]>=1.5)
-bk(m7,"Avg R:R",f"{res.get(‘avg_rr’,0):.2f}",res.get(‘avg_rr’,0)>=1.5)
+c.markdown(f'<div class="kpi-card"><div class="kpi-label">{l}</div><div class="kpi-val" style="color:{col};font-size:1.1rem;">{v}</div></div>',unsafe_allow_html=True)
+bk(m1,"Trades",res["total_trades"]); bk(m2,"Win Rate",f"{res[‘win_rate']*100:.1f}%",res[‘win_rate']>=.5)
+bk(m3,"PnL",f"${res[‘total_pnl']:+,.2f}",res[‘total_pnl']>=0); bk(m4,"Max DD",f"{res[‘max_drawdown_pct']:.1f}%",res[‘max_drawdown_pct']<=15)
+bk(m5,"Sharpe",f"{res[‘sharpe_ratio']:.2f}",res[‘sharpe_ratio']>=1.); bk(m6,"PF",f"{res[‘profit_factor']:.2f}",res[‘profit_factor']>=1.5)
+bk(m7,"Avg R:R",f"{res.get(‘avg_rr',0):.2f}",res.get(‘avg_rr',0)>=1.5)
 if res.get("equity_curve"):
 fig=go.Figure(go.Scatter(y=res["equity_curve"],mode="lines",line=dict(color="#2563eb",width=2),fill="tozeroy",fillcolor="rgba(37,99,235,.06)"))
 fig.add_hline(y=res["equity_curve"][0],line_dash="dot",line_color="#8b949e")
