@@ -16,7 +16,11 @@
 //═══════════════════════════════════════════════════════════════════
 
 input group "━━━━━ SYMBOL SCANNER ━━━━━"
-input string        Inp_Symbols       = "BTCUSD,ETHUSD,SOLUSD,BNBUSD,XRPUSD,ADAUSD,AVAXUSD,DOTUSD";
+input string        Inp_Symbols       = "BTCUSDm,ETHUSDm,SOLUSDm,BNBUSDm,XRPUSDm,ADAUSDm,AVAXUSDm,DOTUSDm";
+// Exness broker uses lowercase "m" suffix for crypto CFDs (BTCUSDm not BTCUSD).
+// The EA auto-resolves broker variants — you can type with or without the suffix
+// and it will find the correct symbol. If your broker uses a different suffix,
+// just type the exact symbol name as shown in MT5 Market Watch.
 input ENUM_TIMEFRAMES Inp_TF          = PERIOD_H1;
 input ENUM_TIMEFRAMES Inp_HTF         = PERIOD_H4;
 input int           Inp_ScanSec       = 30;         // Scan every N seconds
@@ -48,8 +52,9 @@ input group "━━━━━ RISK (defaults — overridden by Supabase config) �
 input double        Inp_Risk_Pct      = 1.0;
 input double        Inp_MaxDD_Pct     = 20.0;
 input int           Inp_Max_Pos       = 3;
-input double        Inp_Min_Conf      = 0.55;
-input double        Inp_Min_RR        = 1.4;
+input double        Inp_Min_Conf      = 0.75;  // raised from 0.55 — crypto needs high-conviction signals only
+input double        Inp_Min_RR        = 1.0;  // lowered from 1.4 — trend_following TP=2.2x/SL=2.2x gives R:R=1.0 by design
+input int           Inp_FailCooldown_Min = 30; // Minutes to wait after a failed order before retrying same symbol
 
 input group "━━━━━ POSITION MANAGEMENT ━━━━━"
 input bool          Inp_UseTrail      = true;
@@ -113,6 +118,7 @@ struct SSymbolData {
    int      hist_idx;
    // Timestamps
    datetime last_scan;
+   datetime last_fail;       // last failed order attempt — for retry cooldown
    bool     ai_ok;           // last Modal call succeeded?
 };
 
@@ -149,6 +155,7 @@ double       g_total_pnl     = 0;
 
 datetime     g_last_db_sync  = 0;
 double       g_last_live_eq  = 0;    // last equity pushed to live patch
+int          g_scan_count    = 0;    // incremented each OnTimer — gates heartbeat frequency
 
 string       g_log_lines[];
 int          g_log_cnt       = 0;
@@ -176,6 +183,8 @@ int OnInit() {
    g_cfg.paused         = false;
 
    if(!ParseSymbols()) { Alert("No valid symbols!"); return INIT_FAILED; }
+   RestorePositions();   // re-link any already-open positions so reinit doesn't duplicate them
+   if(Inp_DB_Enable) PullStats(); // seed g_total_* from last performance row so restart doesn't zero dashboard
 
    // Whitelist reminder
    Print("ApexHydra v4: Add to MT5 allowed URLs:");
@@ -189,15 +198,16 @@ int OnInit() {
 
    // Pull config immediately
    PullConfig();
-   ScanAll();
 
-   // Write first performance snapshot immediately so dashboard/Telegram
-   // show live balance & equity from the moment the EA starts
+   // Write first performance snapshot — PullStats already seeded globals so this
+   // snapshot carries correct totals, not zeros. Must come AFTER PullStats().
    if(Inp_DB_Enable) {
       DBSyncPerformance(false);
       g_last_db_sync = TimeCurrent();
-      DBPost("events", BuildEventJSON("INFO", "EA started — initial performance snapshot written"));
+      DBPost("events", BuildEventJSON("INFO", "EA started — stats restored from DB"));
    }
+
+   ScanAll();
    return INIT_SUCCEEDED;
 }
 
@@ -219,7 +229,6 @@ void OnTick() {
    g_dd_pct = (g_peak_equity > 0) ? (1.0 - eq / g_peak_equity) * 100.0 : 0;
 
    // Realtime live patch — fires on every tick when equity changes >= $0.01
-   // Lightweight PATCH only (no INSERT) — keeps dashboard & Telegram realtime
    if(Inp_DB_Enable && MathAbs(eq - g_last_live_eq) >= 0.01) {
       DBPatchLive();
       g_last_live_eq = eq;
@@ -227,13 +236,21 @@ void OnTick() {
 
    if(g_cfg.halted || g_cfg.paused) return;
    ManagePositions();
+
+   // Detect position closes on every tick so has_pos resets immediately.
+   // Without this, a TP/SL hit would only be detected on the next OnTimer
+   // (up to 30s later), blocking new entries for that symbol.
+   SyncPositions();
 }
 
 
 void OnTimer() {
+   g_scan_count++;
    CheckRisk();
    if(TimeCurrent() - g_cfg.last_pull >= Inp_Config_Sec) PullConfig();
    if(!g_cfg.halted && !g_cfg.paused) ScanAll();
+   // SyncPositions also runs in OnTick — calling here too catches any edge cases
+   // where a close happens between ticks on illiquid symbols
    SyncPositions();
    if(Inp_Dash) UpdateDashboard();
    if(Inp_DB_Enable && TimeCurrent() - g_last_db_sync >= Inp_DB_SyncSec) {
@@ -246,16 +263,56 @@ void OnTimer() {
 //  SYMBOL PARSING
 //═══════════════════════════════════════════════════════════════════
 
+// Try to resolve a symbol name against broker market watch.
+// Brokers append suffixes — Exness uses lowercase "m" (BTCUSDm),
+// others use uppercase "M" or nothing.
+// Strategy: try as-typed → lowercase m → uppercase M → stripped base.
+// Returns the exact broker symbol string, or "" on failure.
+string ResolveBrokerSymbol(string raw) {
+   StringTrimLeft(raw); StringTrimRight(raw);
+   if(raw == "") return "";
+
+   // Candidate list — order matters: most common Exness variant first
+   string candidates[4];
+   candidates[0] = raw;                          // as typed: "BTCUSDm" or "BTCUSD"
+   candidates[1] = raw + "m";                    // Exness lowercase:  "BTCUSDm"
+   candidates[2] = raw + "M";                    // some brokers uppercase: "BTCUSDM"
+   // Strip trailing m/M for the 4th candidate (handles "BTCUSDm" → "BTCUSD")
+   string stripped = raw;
+   int    rlen     = StringLen(raw);
+   if(rlen > 1) {
+      string last = StringSubstr(raw, rlen - 1, 1);
+      if(last == "m" || last == "M") stripped = StringSubstr(raw, 0, rlen - 1);
+   }
+   candidates[3] = stripped;
+
+   for(int c = 0; c < 4; c++) {
+      if(candidates[c] == "") continue;
+      if(SymbolSelect(candidates[c], true)) {
+         // Confirm the symbol is actually tradable (not just in market watch)
+         double ask = SymbolInfoDouble(candidates[c], SYMBOL_ASK);
+         if(ask > 0) {
+            if(candidates[c] != raw)
+               Print("Symbol resolved: '", raw, "' → '", candidates[c], "'");
+            return candidates[c];
+         }
+      }
+   }
+   Print("Skip: '", raw, "' — not found on broker (tried: ",
+         candidates[0], " / ", candidates[1], " / ", candidates[2], " / ", candidates[3], ")");
+   return "";
+}
+
 bool ParseSymbols() {
    string parts[];
    int cnt = StringSplit(Inp_Symbols, ',', parts);
    ArrayResize(g_syms, cnt);
    g_sym_cnt = 0;
    for(int i = 0; i < cnt; i++) {
-      StringTrimLeft(parts[i]); StringTrimRight(parts[i]); StringToUpper(parts[i]);
-      if(!SymbolSelect(parts[i], true)) { Print("Skip: ", parts[i]); continue; }
+      string resolved = ResolveBrokerSymbol(parts[i]);
+      if(resolved == "") continue;               // skip unresolvable
       ZeroMemory(g_syms[g_sym_cnt]);
-      g_syms[g_sym_cnt].symbol        = parts[i];
+      g_syms[g_sym_cnt].symbol        = resolved; // store exact broker name
       g_syms[g_sym_cnt].regime_id     = 5;
       g_syms[g_sym_cnt].regime_name   = "Undefined";
       g_syms[g_sym_cnt].regime_broad  = "RANGING";
@@ -271,16 +328,108 @@ bool ParseSymbols() {
 }
 
 //═══════════════════════════════════════════════════════════════════
+//  RESTORE POSITIONS (called on OnInit so reinit doesn't lose state)
+//  Scans all open broker positions by magic number and re-links them
+//  to g_syms entries. Prevents duplicate opens after EA restart.
+//═══════════════════════════════════════════════════════════════════
+
+void RestorePositions() {
+   for(int p = 0; p < PositionsTotal(); p++) {
+      if(!g_pos.SelectByIndex(p)) continue;
+      if(g_pos.Magic() != Inp_Magic) continue;
+      string sym = g_pos.Symbol();
+      int si = FindSym(sym);
+      if(si < 0) continue;
+
+      if(g_syms[si].has_pos) {
+         // Duplicate position on same symbol — orphaned from pre-fix restart bug.
+         // EA cannot manage it. Alert trader to close manually.
+         Log("WARNING: duplicate " + sym + " ticket#" + IntegerToString((int)g_pos.Ticket()) +
+             " open@" + DoubleToString(g_pos.PriceOpen(), (int)SymbolInfoInteger(sym, SYMBOL_DIGITS)) +
+             " — EA will NOT manage this. Close it manually in MT5.");
+         Alert("ApexHydra: duplicate " + sym + " position #" +
+               IntegerToString((int)g_pos.Ticket()) + " — close manually!");
+         continue;
+      }
+
+      g_syms[si].has_pos    = true;
+      g_syms[si].pos_ticket = g_pos.Ticket();
+      g_syms[si].pos_open   = g_pos.PriceOpen();
+      g_syms[si].pos_sl     = g_pos.StopLoss();
+      g_syms[si].pos_tp     = g_pos.TakeProfit();
+      // Don't double-count in g_total_trades — PullStats() already seeds from DB.
+      // But if PullStats found 0 (fresh DB), count restored positions as known trades.
+      Log("RESTORED " + sym + " ticket#" + IntegerToString((int)g_pos.Ticket()) +
+          " open@" + DoubleToString(g_pos.PriceOpen(), (int)SymbolInfoInteger(sym, SYMBOL_DIGITS)));
+   }
+}
+
+//═══════════════════════════════════════════════════════════════════
 //  MAIN SCAN
 //═══════════════════════════════════════════════════════════════════
 
 void ScanAll() {
+   int open_cnt   = CountOpenPos();
+   int seeking    = 0;   // symbols actively seeking entry this scan
+   int skipped_pos= 0;   // symbols skipped because already in trade
+   int skipped_cd = 0;   // symbols skipped due to fail cooldown
+
    for(int i = 0; i < g_sym_cnt; i++) {
+
+      // ── Broker-level position check (fast — no HTTP) ──────────────
+      // Do this BEFORE CollectIndicators to avoid wasting API calls
+      // on symbols we can't trade.
+
+      // Check has_pos flag
+      if(g_syms[i].has_pos) { skipped_pos++; continue; }
+
+      // Broker double-check: catches desync if has_pos was lost on restart
+      if(PositionSelect(g_syms[i].symbol)) {
+         if(PositionGetInteger(POSITION_MAGIC) == Inp_Magic) {
+            g_syms[i].has_pos    = true;
+            g_syms[i].pos_ticket = (ulong)PositionGetInteger(POSITION_TICKET);
+            skipped_pos++;
+            continue;
+         }
+      }
+
+      // Fail cooldown — symbol recently rejected, wait before retrying
+      if(g_syms[i].last_fail > 0 &&
+         TimeCurrent() - g_syms[i].last_fail < Inp_FailCooldown_Min * 60) {
+         skipped_cd++;
+         continue;
+      }
+
+      // ── Active scan ───────────────────────────────────────────────
+      seeking++;
       if(!CollectIndicators(g_syms[i])) continue;
       CallModalAI(g_syms[i]);
-      if(g_syms[i].signal != 0 && !g_syms[i].has_pos)
+
+      if(g_syms[i].signal != 0)
          ExecuteTrade(g_syms[i]);
       g_syms[i].last_scan = TimeCurrent();
+   }
+
+   // Heartbeat — always log so we know EA is alive
+   string hb = TimeToString(TimeCurrent(), TIME_SECONDS) +
+      " | Pos:" + IntegerToString(open_cnt) + "/" + IntegerToString(g_cfg.max_positions) +
+      " | Scanning:" + IntegerToString(seeking) +
+      " | Holding:" + IntegerToString(skipped_pos) +
+      " | Cooldown:" + IntegerToString(skipped_cd);
+   // Log only every 5 scans to avoid spam (g_scan_count is incremented in OnTimer)
+   if(g_scan_count % 5 == 0) Log("❤ " + hb);
+
+   // Per-position status on every scan so user can see live state
+   for(int i = 0; i < g_sym_cnt; i++) {
+      if(!g_syms[i].has_pos) continue;
+      if(g_pos.SelectByTicket(g_syms[i].pos_ticket)) {
+         double pnl_now = g_pos.Profit() + g_pos.Swap() + g_pos.Commission();
+         Log("  ● " + g_syms[i].symbol +
+             " #" + IntegerToString((int)g_syms[i].pos_ticket) +
+             " P&L:$" + DoubleToString(pnl_now, 2) +
+             " SL:" + DoubleToString(g_pos.StopLoss(), _Digits) +
+             " TP:" + DoubleToString(g_pos.TakeProfit(), _Digits));
+      }
    }
 }
 
@@ -550,13 +699,26 @@ void CallModalAI(SSymbolData &s) {
 
 //═══════════════════════════════════════════════════════════════════
 //  FILLING MODE AUTO-DETECT
-//  Brokers advertise which filling modes they support per symbol.
-//  IOC is rarely supported on crypto — FOK or RETURN is standard.
-//  Using the wrong mode → error 10017 "trade disabled".
+//  Exness crypto CFDs (BTCUSDm, ETHUSDm etc.) report FOK as supported
+//  in SYMBOL_FILLING_MODE bitmask but reject it at execution with
+//  err:10017 "trade disabled". Correct mode for Exness crypto = RETURN.
+//
+//  Fix: crypto symbols always get ORDER_FILLING_RETURN.
+//  Non-crypto (forex, metals) use the bitmask as before.
 //═══════════════════════════════════════════════════════════════════
 
 ENUM_ORDER_TYPE_FILLING GetFilling(const string sym) {
-   // SYMBOL_FILLING_MODE returns a bitmask of supported filling types
+   // Known crypto bases — always use RETURN on Exness
+   string cryptoBases[] = {
+      "BTC","ETH","SOL","BNB","XRP","ADA","DOT","AVA",
+      "LTC","DOGE","MATIC","LINK","UNI","ATOM","FIL"
+   };
+   string base = StringSubstr(sym, 0, 3);
+   for(int i = 0; i < ArraySize(cryptoBases); i++) {
+      if(base == cryptoBases[i])
+         return ORDER_FILLING_RETURN;  // Exness rejects FOK for crypto despite bitmask
+   }
+   // Non-crypto: use bitmask
    long mode = 0;
    SymbolInfoInteger(sym, SYMBOL_FILLING_MODE, mode);
    if((mode & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;
@@ -619,6 +781,7 @@ void ExecuteTrade(SSymbolData &s) {
 
       if(Inp_DB_Enable) DBLogTrade(s, "OPEN", price, 0);
    } else {
+      s.last_fail = TimeCurrent();   // start cooldown — won't retry for Inp_FailCooldown_Min
       Log("FAILED " + s.symbol + " err:" + IntegerToString(g_trade.ResultRetcode()) +
           " [" + g_trade.ResultRetcodeDescription() + "]" +
           " filling:" + EnumToString(GetFilling(s.symbol)));
@@ -725,6 +888,42 @@ void CheckRisk() {
       g_cfg.halted = false;
       Log("✅ RESUMED — DD recovered to " + DoubleToString(g_dd_pct,2)+"%");
       PushHaltToSupabase(false);
+   }
+}
+
+void PullStats() {
+   // Seed in-memory counters from the last performance snapshot so EA restarts
+   // don't zero out live_trades/wins/losses/pnl on the dashboard.
+   // Reads: performance table (total_trades, wins, losses, total_pnl)
+   // Also reads open trade count from trades table (action=OPEN, no closed_at)
+   if(!Inp_DB_Enable) return;
+
+   // ── 1. Pull last performance row ──────────────────────────────────
+   string url = Inp_DB_URL + "/rest/v1/performance"
+              + "?magic=eq." + IntegerToString(Inp_Magic)
+              + "&order=timestamp.desc&limit=1";
+   string headers = "apikey: " + Inp_DB_Key + "\r\nAuthorization: Bearer " + Inp_DB_Key + "\r\n";
+   char req[], res[];
+   string res_hdr;
+   int code = WebRequest("GET", url, headers, 5000, req, res, res_hdr);
+   if(code == 200) {
+      string json = CharArrayToString(res);
+      if(StringFind(json, "total_trades") >= 0) {
+         int   t = (int)JSONGetInt(json, "total_trades");
+         int   w = (int)JSONGetInt(json, "wins");
+         int   l = (int)JSONGetInt(json, "losses");
+         double p = JSONGetDbl(json, "total_pnl");
+         // Only seed if DB has more trades than we counted (handles fresh restarts)
+         if(t > g_total_trades) {
+            g_total_trades = t;
+            g_total_wins   = w;
+            g_total_losses = l;
+            g_total_pnl    = p;
+            Log("Stats restored from DB: " + IntegerToString(t) + " trades, " +
+                IntegerToString(w) + "W/" + IntegerToString(l) + "L, PnL=$" +
+                DoubleToString(p, 2));
+         }
+      }
    }
 }
 
