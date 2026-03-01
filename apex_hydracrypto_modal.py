@@ -38,7 +38,7 @@
 
 import modal
 import numpy as np
-import json, math, os, pickle
+import json, math, os, pickle, statistics
 from collections import deque
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -295,6 +295,112 @@ def _bollinger(prices: list, period: int = 20) -> tuple[float, float, float]:
 
 def _safe(a: float, b: float, fb: float = 0.0) -> float:
     return a / b if b else fb
+
+
+def analyze_candles(candles: list) -> dict:
+    """
+    Analyzes the last 100 OHLCV candles. Returns ATR, MA50, and a buy
+    signal fired when price dips below the 50-bar moving average with
+    evidence of a mean-reversion bounce (not a breakdown).
+
+    Args:
+        candles: list of dicts with open/high/low/close/volume keys,
+                 ordered oldest → newest. Max 100 used.
+
+    Returns dict with: atr, atr_pct, ma50, current_price, dip_below_ma,
+                       dip_pct, buy_signal, signal_strength, reason,
+                       conditions {below_ma50, dip_manageable, atr_ok,
+                                   candle_turning, volume_ok}
+
+    Buy signal requires ALL 5 conditions:
+      A) price < MA50                       — the dip
+      B) dip_pct ≤ 3 × ATR%               — dip is manageable, not a crash
+      C) ATR% ≥ 0.5%                       — market is moving
+      D) last close > prior close           — candle turning back up
+      E) volume[-1] ≥ median(volume[-10:]) — conviction behind reversal
+    """
+    if not candles:
+        return {"error": "No candles provided", "buy_signal": False}
+
+    window = candles[-100:]
+    n = len(window)
+    if n < 52:
+        return {"error": f"Need ≥52 candles, got {n}", "buy_signal": False}
+
+    closes  = [float(c["close"])         for c in window]
+    highs   = [float(c["high"])          for c in window]
+    lows    = [float(c["low"])           for c in window]
+    volumes = [float(c.get("volume", 1)) for c in window]
+
+    # ATR-14
+    period = 14
+    trs = [
+        max(highs[i] - lows[i],
+            abs(highs[i] - closes[i-1]),
+            abs(lows[i]  - closes[i-1]))
+        for i in range(1, n)
+    ]
+    atr = sum(trs[-period:]) / min(len(trs), period)
+
+    # MA50
+    ma50  = sum(closes[-50:]) / 50
+    price = closes[-1]
+    atr_pct   = (atr / price * 100) if price else 0.0
+    dip_below = price < ma50
+    dip_pct   = ((ma50 - price) / ma50 * 100) if dip_below else 0.0
+
+    # Conditions
+    cond_a = dip_below
+    cond_b = dip_pct <= 3 * atr_pct
+    cond_c = atr_pct >= 0.5
+    cond_d = closes[-1] > closes[-2]
+    cond_e = volumes[-1] >= statistics.median(volumes[-10:])
+    buy_signal = all([cond_a, cond_b, cond_c, cond_d, cond_e])
+
+    # Signal strength (0–1)
+    if dip_below and atr > 0:
+        dip_score  = min(dip_pct / max(atr_pct, 1e-9), 1.0)
+        vol_ratio  = volumes[-1] / max(statistics.median(volumes[-10:]), 1e-9)
+        vol_score  = min(vol_ratio / 2.0, 1.0)
+        strength   = round(dip_score * 0.6 + vol_score * 0.4, 4)
+    else:
+        strength = 0.0
+
+    # Reason
+    if buy_signal:
+        reason = (f"BUY: price {price:.2f} is {dip_pct:.2f}% below MA50 ({ma50:.2f}), "
+                  f"ATR={atr:.2f} ({atr_pct:.2f}%), turning up, volume OK")
+    elif not cond_a:
+        reason = f"No signal: price {price:.2f} above MA50 ({ma50:.2f})"
+    elif not cond_b:
+        reason = (f"No signal: dip {dip_pct:.2f}% > 3×ATR% ({3*atr_pct:.2f}%) — "
+                  f"potential breakdown, not bounce")
+    elif not cond_c:
+        reason = f"No signal: ATR% {atr_pct:.2f}% too low (need ≥0.5%)"
+    elif not cond_d:
+        reason = "No signal: last candle still declining — wait for reversal"
+    else:
+        reason = "No signal: volume below median — no conviction"
+
+    return {
+        "atr":             round(atr, 5),
+        "atr_pct":         round(atr_pct, 4),
+        "ma50":            round(ma50, 5),
+        "current_price":   round(price, 5),
+        "dip_below_ma":    dip_below,
+        "dip_pct":         round(dip_pct, 4),
+        "buy_signal":      buy_signal,
+        "signal_strength": strength,
+        "reason":          reason,
+        "candles_used":    n,
+        "conditions": {
+            "below_ma50":     cond_a,
+            "dip_manageable": cond_b,
+            "atr_ok":         cond_c,
+            "candle_turning": cond_d,
+            "volume_ok":      cond_e,
+        },
+    }
 
 
 def _macd_series(closes: list) -> list[float]:
@@ -1481,6 +1587,83 @@ async def health():
     }
 
 
+# ── POST /analyze_candles ─────────────────────────────────────────────
+
+@api.post("/analyze_candles")
+async def endpoint_analyze_candles(request: FastAPIRequest):
+    """
+    Analyses the last 100 OHLCV candles and returns ATR, MA50, and a
+    buy signal when price dips below the 50-bar MA with reversal evidence.
+    Body: { "candles": [ {open, high, low, close, volume}, ... ] }
+    """
+    auth_err = await _require_auth(request)
+    if auth_err:
+        return auth_err
+    try:
+        body    = await request.json()
+        candles = body.get("candles", [])
+        if not candles:
+            return JSONResponse({"error": "Provide candles array in request body"}, 400)
+        return analyze_candles(candles)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, 500)
+
+
+# ── GET /btc_sentiment ────────────────────────────────────────────────
+
+@api.get("/btc_sentiment")
+async def endpoint_btc_sentiment(
+    request: FastAPIRequest,
+    max_headlines: int = 10,
+    max_age_hours: int = 6,
+):
+    """
+    Fetches recent BTC/crypto headlines from Finnhub and returns a
+    sentiment score -1 (bearish) to +1 (bullish) via Claude Haiku.
+    Uses keyword-based sentiment scoring on Finnhub headlines.
+    """
+    auth_err = await _require_auth(request)
+    if auth_err:
+        return auth_err
+    try:
+        import requests as _req
+        finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
+        now    = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=max_age_hours)
+        if not finnhub_key:
+            return JSONResponse({"error": "FINNHUB_API_KEY not set"}, 500)
+        r = _req.get(
+            f"https://finnhub.io/api/v1/news?category=crypto&token={finnhub_key}",
+            timeout=8,
+        )
+        r.raise_for_status()
+        btc_terms = ["bitcoin", "btc", "crypto", "ethereum", "eth",
+                     "coinbase", "binance", "digital asset", "halving", "etf"]
+        headlines = []
+        for art in r.json():
+            pub_time = datetime.fromtimestamp(art.get("datetime", 0), tz=timezone.utc)
+            if pub_time < cutoff:
+                continue
+            headline = art.get("headline", "").strip()
+            if headline and any(t in (headline + art.get("summary", "")).lower()
+                                for t in btc_terms):
+                headlines.append(headline)
+            if len(headlines) >= max_headlines:
+                break
+        if not headlines:
+            return {"score": 0.0, "label": "NEUTRAL", "confidence": 0.0,
+                    "summary": "No recent BTC headlines found.",
+                    "headlines": [], "headline_count": 0,
+                    "timestamp": now.isoformat()}
+        result = _btc_sentiment_score(headlines)
+        result["headlines"]      = headlines
+        result["headline_count"] = len(headlines)
+        result["timestamp"]      = now.isoformat()
+        return result
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, 500)
+
+
 # ──────────────────────────────────────────────────────────────────────
 #  SECTION 9 — SCHEDULED BACKGROUND TASKS  (5 cron jobs)
 #
@@ -1583,6 +1766,37 @@ def _due(state: dict, key: str, interval_hours: float) -> bool:
 
 # ── Sub-task A: News Monitor ──────────────────────────────────────────
 
+def _btc_sentiment_score(headlines: list[str]) -> dict:
+    """
+    Scores a list of BTC/crypto headlines using keyword analysis.
+    Returns {"score": float[-1,1], "label": str, "confidence": float, "summary": str}.
+    Called by _run_news_monitor() and the /btc_sentiment endpoint.
+    """
+    if not headlines:
+        return {"score": 0.0, "label": "NEUTRAL", "confidence": 0.0,
+                "summary": "No headlines to score."}
+
+    # ── Keyword scoring ───────────────────────────────────────────────
+    BULL_KW = ["surge", "rally", "bullish", "soar", "gain", "record", "ath",
+               "inflow", "approve", "etf", "institutional", "breakout", "adoption"]
+    BEAR_KW = ["crash", "drop", "plunge", "bearish", "ban", "hack", "sell",
+               "loss", "outflow", "reject", "fraud", "collapse", "liquidat",
+               "panic", "regulation", "fine", "lawsuit"]
+    scores = []
+    for h in headlines:
+        t    = h.lower()
+        bull = sum(1 for kw in BULL_KW if kw in t)
+        bear = sum(1 for kw in BEAR_KW if kw in t)
+        tot  = bull + bear
+        scores.append((bull - bear) / tot if tot else 0.0)
+    score = max(-1.0, min(1.0, sum(scores) / len(scores)))
+    conf  = max(0.0, 1.0 - (statistics.stdev(scores) if len(scores) > 1 else 0.5))
+    label = "BULLISH" if score >= 0.2 else ("BEARISH" if score <= -0.2 else "NEUTRAL")
+    return {"score": round(score, 4), "label": label,
+            "confidence": round(conf, 4),
+            "summary": f"Keyword analysis of {len(headlines)} headlines: {label.lower()} bias."}
+
+
 def _run_news_monitor():
     import requests
     from supabase import create_client
@@ -1678,6 +1892,52 @@ def _run_news_monitor():
             print("[NEWS] No active blackouts")
     except Exception as e:
         print(f"[NEWS] DB write failed: {e}")
+
+    # ── BTC Sentiment scoring (runs every 5 min alongside news monitor) ──
+    # Collects the same Finnhub crypto headlines used for shock detection
+    # and scores them -1 (bearish) to +1 (bullish) via Claude Haiku.
+    # Result is written to the events table so the dashboard can display it
+    # and future signal fusion can optionally weight it.
+    finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
+    if finnhub_key:
+        try:
+            import requests as _req
+            cutoff = now - timedelta(hours=6)
+            r = _req.get(
+                f"https://finnhub.io/api/v1/news?category=crypto&token={finnhub_key}",
+                timeout=8,
+            )
+            r.raise_for_status()
+            btc_terms = ["bitcoin", "btc", "crypto", "ethereum", "eth",
+                         "coinbase", "binance", "digital asset", "halving", "etf"]
+            sent_headlines = []
+            for art in r.json():
+                pub_time = datetime.fromtimestamp(art.get("datetime", 0), tz=timezone.utc)
+                if pub_time < cutoff:
+                    continue
+                headline = art.get("headline", "").strip()
+                if headline and any(t in (headline + art.get("summary", "")).lower()
+                                    for t in btc_terms):
+                    sent_headlines.append(headline)
+                if len(sent_headlines) >= 10:
+                    break
+
+            if sent_headlines:
+                sentiment = _btc_sentiment_score(sent_headlines)
+                print(f"[SENTIMENT] {sentiment['label']} {sentiment['score']:+.3f} "
+                      f"(conf={sentiment['confidence']:.2f}) — {sentiment['summary']}")
+                try:
+                    sb.table("events").insert({
+                        "type":    "SENTIMENT",
+                        "message": (f"{sentiment['label']} {sentiment['score']:+.3f} | "
+                                    f"conf={sentiment['confidence']:.2f} | "
+                                    f"{sentiment['summary']} "
+                                    f"[{len(sent_headlines)} headlines]"),
+                    }).execute()
+                except Exception as e:
+                    print(f"[SENTIMENT] DB write failed: {e}")
+        except Exception as e:
+            print(f"[SENTIMENT] Fetch/score failed: {e}")
 
 
 # ── Sub-task B: Online Learner (Gradient Boosting Behavioral Cloning) ─────────
