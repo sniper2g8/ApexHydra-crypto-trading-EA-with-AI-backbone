@@ -100,6 +100,7 @@ _REGIME_HISTORY: dict      = {}     # symbol → deque[(datetime, regime_str)]
 _REGIME_HISTORY_MAXLEN     = 30
 _CONTAINER_START: datetime = datetime.now(timezone.utc)
 _MR_WARMUP_SECS            = 900    # 15 min warm-up before MR is fully trusted
+_seeded_symbols: set       = set()
 
 # ──────────────────────────────────────────────────────────────────────
 #  SCHEMAS
@@ -182,6 +183,7 @@ class AIResponse(BaseModel):
     sl_atr_mult:    float
     tp_atr_mult:    float
     rr_ratio:       float
+    tp_maturity:    float  = 0.0   # 0.0=bootstrap tight TP, 1.0=fully mature wide TP
     feature_scores: dict
     reasoning:      str
     news_blocked:   bool   = False
@@ -423,6 +425,8 @@ def build_features(p: AIRequest) -> tuple[np.ndarray, dict]:
     # ── Time encoding (24/7 crypto, but volume patterns exist) ────────
     h_sin = math.sin(2 * math.pi * p.hour / 24)
     h_cos = math.cos(2 * math.pi * p.hour / 24)
+    d_sin = math.sin(2 * math.pi * p.dow  / 7)
+    d_cos = math.cos(2 * math.pi * p.dow  / 7)
     # Crypto high-volume window: 13-21 UTC (US session overlap)
     peak_session = 1.0 if 13 <= p.hour < 21 else 0.0
 
@@ -433,6 +437,8 @@ def build_features(p: AIRequest) -> tuple[np.ndarray, dict]:
     hist_bias = _compute_history_bias(p.recent_signals, p.recent_outcomes, p.recent_regimes)
 
     # ── Interaction terms ─────────────────────────────────────────────
+    trend_x_dir   = adx_norm * di_diff
+    rsi_x_macd    = rsi_norm * macd_norm
     ema_x_htf     = ema_align * htf_bias
 
     features = np.array([
@@ -840,27 +846,48 @@ def check_news_filter(p: AIRequest) -> tuple[bool, str]:
 # ──────────────────────────────────────────────────────────────────────
 
 def compute_position(p: AIRequest, direction: str, confidence: float,
-                     strategy: str) -> tuple[float, float, float, float, float, float]:
-    """Returns: (lots, sl_price, tp_price, sl_atr_mult, tp_atr_mult, rr)"""
+                     strategy: str) -> tuple[float, float, float, float, float, float, float]:
+    """Returns: (lots, sl_price, tp_price, sl_atr_mult, tp_atr_mult, rr, tp_maturity)"""
     if direction == "NONE":
-        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     is_buy = direction == "BUY"
     price  = p.bars.close[0]
     atr    = p.atr
 
-    # Per-strategy SL/TP multipliers
-    # H1 crypto: BTC ATR ~$800, ETH ATR ~$60. TP must be reachable within a session.
-    # At these multipliers:  BTC trend TP ≈ $1,760 move  |  ETH trend TP ≈ $130 move
-    # Previous values (3.8/4.5) required moves that exceeded the full daily range.
+    # Per-strategy SL/TP multipliers (crypto needs wider SL — high volatility)
+    # Each entry: (sl_mult, tp_tight, tp_full)
+    #   tp_tight = TP at model bootstrap (0 trades) — closer target, more wins, more training data
+    #   tp_full  = TP at model maturity (80+ trades at good WR) — wider target, higher R:R
     sl_tp_map = {
-        "trend_following": (2.2, 2.2),   # R:R 1:1 — exit quickly, let win rate do the work
-        "mean_reversion":  (1.6, 2.0),   # MR reverts fast, modest TP fine
-        "breakout":        (2.0, 3.0),   # breakouts earn more but stall — cap at 3×
+        "trend_following": (2.2, 2.0, 3.8),
+        "mean_reversion":  (1.6, 1.5, 2.5),
+        "breakout":        (2.0, 2.2, 4.5),
     }
-    sl_mult, tp_mult = sl_tp_map.get(strategy, (2.2, 2.2))
-    # Confidence boost removed: high confidence = direction certainty, NOT larger moves.
-    # Kelly sizing already scales lots with confidence — no need to touch TP distance.
+    sl_mult, tp_tight, tp_full = sl_tp_map.get(strategy, (2.2, 2.0, 3.8))
+
+    # ── Dynamic TP: scale from tight → full based on trade maturity ──────────
+    # Maturity [0.0 → 1.0] grows with closed trade history (target: 80 trades)
+    n_outcomes = len(p.recent_outcomes) if p.recent_outcomes else 0
+    maturity   = min(n_outcomes / 80.0, 1.0)
+
+    # Rolling win rate feedback (last 20 trades) adjusts maturity up or down
+    if n_outcomes >= 20:
+        recent_wins = sum(1 for x in (p.recent_outcomes or [])[-20:] if x > 0)
+        rolling_wr  = recent_wins / 20.0
+        if rolling_wr < 0.45:
+            # Struggling — stay tighter to collect more wins
+            maturity *= 0.5
+        elif rolling_wr >= 0.60:
+            # Performing well — allow TP to expand faster
+            maturity = min(1.0, maturity * 1.25)
+
+    tp_mult = tp_tight + (tp_full - tp_tight) * maturity
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Strong signal boost (applies on top of dynamic TP)
+    if confidence >= 0.75:
+        tp_mult *= 1.15   # reduced from 1.25 — dynamic scaling already handles expansion
 
     sl_dist  = atr * sl_mult
     tp_dist  = atr * tp_mult
@@ -876,7 +903,7 @@ def compute_position(p: AIRequest, direction: str, confidence: float,
     risk_pct_eff  = min(kelly * 100, p.risk_pct)
     # Guard against zero kelly (e.g. rr < 1 and confidence < 0.5)
     if risk_pct_eff <= 0:
-        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     sizing_base   = p.allocated_capital if p.allocated_capital > 0 else p.account_balance
     risk_amount   = sizing_base * (risk_pct_eff / 100.0)
 
@@ -889,7 +916,7 @@ def compute_position(p: AIRequest, direction: str, confidence: float,
     lots = math.floor(lots / step) * step
     lots = max(p.min_lot, min(p.max_lot, lots))
 
-    return round(lots, 4), round(sl_price, p.digits), round(tp_price, p.digits), sl_mult, tp_mult, round(rr, 3)
+    return round(lots, 4), round(sl_price, p.digits), round(tp_price, p.digits), sl_mult, tp_mult, round(rr, 3), round(maturity, 3)
 
 
 def direction_to_signal(direction: str, confidence: float) -> int:
@@ -1019,7 +1046,7 @@ async def _predict_inner(p: AIRequest):
             rb_reason += f" | SpreadPenalty:{penalty:.2f}"
 
     # Position sizing
-    lots, sl, tp, sl_m, tp_m, rr = compute_position(p, final_dir, final_conf, strategy)
+    lots, sl, tp, sl_m, tp_m, rr, tp_mat = compute_position(p, final_dir, final_conf, strategy)
     signal_int = direction_to_signal(final_dir, final_conf)
 
     reasoning = (
@@ -1028,6 +1055,7 @@ async def _predict_inner(p: AIRequest):
         f"RB={rb_direction}({rb_conf:.0%}) | "
         f"PPO={ppo_dir}({ppo_conf:.0%}) | "
         f"Final={final_dir}({final_conf:.0%}) | "
+        f"TP_mat={tp_mat:.0%}({len(p.recent_outcomes or [])}trades) | "
         f"{rb_reason}"
     )
     if news_blocked: reasoning += f" | {news_reason}"
@@ -1050,6 +1078,7 @@ async def _predict_inner(p: AIRequest):
         sl_atr_mult    = sl_m,
         tp_atr_mult    = tp_m,
         rr_ratio       = rr,
+        tp_maturity    = tp_mat,
         feature_scores = feature_scores,
         reasoning      = reasoning,
         news_blocked   = news_blocked,
@@ -1181,7 +1210,7 @@ async def backtest_endpoint(request: FastAPIRequest):
         direction, confidence, _ = STRATEGY_FN[strategy](fp)
 
         if direction == "NONE" or confidence < req.min_confidence: continue
-        lots, sl, tp, _, _, rr = compute_position(fp, direction, confidence, strategy)
+        lots, sl, tp, _, _, rr, _ = compute_position(fp, direction, confidence, strategy)
         if rr < req.min_rr or lots <= 0: continue
 
         entry_price = bar.close
@@ -2033,7 +2062,7 @@ def test():
     strategy   = REGIME_TO_STRATEGY[regime_str]
     regime_id, regime_name, regime_conf = classify_regime_granular(p, regime_str, features)
     direction, rb_conf, reason = STRATEGY_FN[strategy](p)
-    lots, sl, tp, sl_m, tp_m, rr = compute_position(p, direction, rb_conf, strategy)
+    lots, sl, tp, sl_m, tp_m, rr, tp_mat = compute_position(p, direction, rb_conf, strategy)
     signal_int = direction_to_signal(direction, rb_conf)
 
     print(f"\n{'═'*62}")
@@ -2046,7 +2075,7 @@ def test():
     print(f"  Signal:     {SIGNAL_NAMES.get(signal_int,'?')} ({signal_int})")
     print(f"  Lots:       {lots}")
     print(f"  SL:         {sl:.2f}  ({sl_m}×ATR)")
-    print(f"  TP:         {tp:.2f}  ({tp_m}×ATR)")
+    print(f"  TP:         {tp:.2f}  ({tp_m:.2f}×ATR, maturity={tp_mat:.0%})")
     print(f"  R:R:        {rr:.2f}")
     print(f"  Reason:     {reason}")
     print(f"  Scores:     {scores}")
