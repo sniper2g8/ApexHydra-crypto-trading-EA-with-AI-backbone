@@ -627,6 +627,12 @@ void CallModalAI(SSymbolData &s) {
    }
    h_sigs+="]"; h_pnls+="]"; h_regs+="]";
 
+   // Resolve hour and day-of-week BEFORE StringFormat — MQL5 forbids declarations inside function calls
+   MqlDateTime _dt;
+   TimeToStruct(TimeCurrent(), _dt);
+   int cur_hour = _dt.hour;
+   int cur_dow  = _dt.day_of_week;
+
    // JSON payload
    string body = StringFormat(
       "{"
@@ -669,10 +675,7 @@ void CallModalAI(SSymbolData &s) {
       SymbolInfoInteger(sym, SYMBOL_SPREAD) * 1.0,
       SymbolInfoDouble(sym, SYMBOL_BID),
       SymbolInfoDouble(sym, SYMBOL_ASK),
-      // Hour and day-of-week for time-based feature encoding (MQL5 datetime struct)
-      MqlDateTime dt; TimeToStruct(TimeCurrent(), dt);
-      (int)dt.hour,
-      (int)dt.day_of_week,
+      cur_hour, cur_dow,
       h_sigs, h_pnls, h_regs,
       (news_mins < Inp_News_Buffer_Min ? "true" : "false"),
       news_mins,
