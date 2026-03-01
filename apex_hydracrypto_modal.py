@@ -102,6 +102,88 @@ _CONTAINER_START: datetime = datetime.now(timezone.utc)
 _MR_WARMUP_SECS            = 900    # 15 min warm-up before MR is fully trusted
 _seeded_symbols: set       = set()
 
+# ── Loss re-entry tracker ─────────────────────────────────────────────
+# Records the last loss timestamp + regime per symbol so _predict_inner
+# can apply a cooldown and regime validation before re-entering.
+_LAST_LOSS: dict = {}   # symbol → {"ts": datetime, "regime": str, "pnl": float}
+_LOSS_HARD_COOLDOWN_SECS  = 900    # 15 min absolute block after a loss
+_LOSS_REGIME_MIN_CONF     = 0.70   # minimum regime confidence required to re-enter
+_LOSS_REGIME_CONSISTENCY  = 7      # need 7 of last 10 readings same regime
+_LOSS_REENTRY_CONF_PENALTY= 0.08   # confidence penalty applied even after passing checks
+
+
+def _record_loss(symbol: str, regime: str, pnl: float):
+    """Called when a loss is detected. Records timestamp for cooldown tracking."""
+    _LAST_LOSS[symbol] = {
+        "ts":     datetime.now(timezone.utc),
+        "regime": regime,
+        "pnl":    pnl,
+    }
+    print(f"[REENTRY] Loss recorded for {symbol}: pnl={pnl:.2f} regime={regime}")
+
+
+def _check_loss_reentry(symbol: str, regime_str: str, regime_conf: float) -> tuple[bool, str]:
+    """
+    After a loss, validates whether re-entry is safe before allowing a new signal.
+
+    Returns (blocked: bool, reason: str).
+
+    Three-stage check:
+      Stage 1 — Hard cooldown: block for 15 min regardless of regime.
+                 Prevents panic re-entries while the market is still moving.
+      Stage 2 — Regime consistency: need 7/10 recent readings to match current
+                 regime. Ensures the regime is a genuine sustained condition,
+                 not a single-candle blip that fooled the detector.
+      Stage 3 — Regime confidence: require ≥0.70 (not just min_confidence 0.55).
+                 Forces the signal to be high conviction before re-engaging.
+
+    If all three pass, a confidence penalty is applied in _predict_inner as a
+    further cost for re-entering after a loss.
+    """
+    loss_info = _LAST_LOSS.get(symbol)
+    if not loss_info:
+        return False, ""   # no recent loss — no restriction
+
+    now     = datetime.now(timezone.utc)
+    elapsed = (now - loss_info["ts"]).total_seconds()
+
+    # Stage 1: Hard cooldown
+    if elapsed < _LOSS_HARD_COOLDOWN_SECS:
+        remaining = int((_LOSS_HARD_COOLDOWN_SECS - elapsed) / 60)
+        return True, f"LossCooldown:{remaining}min_remaining(pnl={loss_info['pnl']:.2f})"
+
+    # Cooldown passed — now validate regime before clearing the block
+    hist = list(_REGIME_HISTORY.get(symbol, []))
+
+    # Stage 2: Regime consistency — need 7/10 same regime
+    if len(hist) >= 10:
+        recent_10     = hist[:10]
+        same_regime   = sum(1 for _, r in recent_10 if r == regime_str)
+        if same_regime < _LOSS_REGIME_CONSISTENCY:
+            return True, (
+                f"ReentryBlocked:regime_unstable({same_regime}/10 {regime_str}) "
+                f"last_loss_regime={loss_info['regime']}"
+            )
+    elif len(hist) >= 5:
+        # Fewer readings — be stricter: require unanimous 5/5
+        same_regime = sum(1 for _, r in hist[:5] if r == regime_str)
+        if same_regime < 5:
+            return True, (
+                f"ReentryBlocked:regime_unstable({same_regime}/5 {regime_str})"
+            )
+
+    # Stage 3: Regime confidence threshold
+    if regime_conf < _LOSS_REGIME_MIN_CONF:
+        return True, (
+            f"ReentryBlocked:regime_conf_low({regime_conf:.0%} < {_LOSS_REGIME_MIN_CONF:.0%})"
+        )
+
+    # All checks passed — clear the loss record so normal trading resumes
+    print(f"[REENTRY] {symbol} re-entry validated: regime={regime_str} "
+          f"conf={regime_conf:.0%} — clearing loss block")
+    del _LAST_LOSS[symbol]
+    return False, ""
+
 # ──────────────────────────────────────────────────────────────────────
 #  SCHEMAS
 # ──────────────────────────────────────────────────────────────────────
@@ -1113,6 +1195,18 @@ async def _predict_inner(p: AIRequest):
         _REGIME_HISTORY[sym] = deque(maxlen=_REGIME_HISTORY_MAXLEN)
     _REGIME_HISTORY[sym].appendleft((datetime.now(timezone.utc), regime_str))
 
+    # ── Loss detection: record if the most recent outcome was a loss ──────────
+    # recent_outcomes is a list of PnL floats sent by the EA (most recent first).
+    # We track the LAST known outcome per symbol and record a loss when a new
+    # negative outcome appears — this fires once per loss, not on every tick.
+    if p.recent_outcomes:
+        last_pnl = p.recent_outcomes[0]   # most recent closed trade PnL
+        prev_loss = _LAST_LOSS.get(sym)
+        # Record if: it's a loss AND (no previous loss recorded, OR it's a newer loss)
+        if last_pnl < 0:
+            if not prev_loss or abs(prev_loss["pnl"] - last_pnl) > 0.01:
+                _record_loss(sym, regime_str, last_pnl)
+
     # Rule-based strategy signal
     rb_direction, rb_conf, rb_reason = STRATEGY_FN[strategy](p)
 
@@ -1183,6 +1277,22 @@ async def _predict_inner(p: AIRequest):
     if news_blocked:
         final_dir  = "NONE"
         final_conf = 0.0
+
+    # ── Loss re-entry validation ──────────────────────────────────────────────
+    # After a loss: 15-min hard cooldown, then require regime consistency (7/10)
+    # and regime confidence ≥ 0.70 before allowing a new signal on this symbol.
+    # If all checks pass but we're still in the first re-entry window, apply a
+    # confidence penalty as an additional cost for re-engaging after a loss.
+    if final_dir != "NONE":
+        reentry_blocked, reentry_reason = _check_loss_reentry(sym, regime_str, regime_conf)
+        if reentry_blocked:
+            final_dir  = "NONE"
+            final_conf = 0.0
+            rb_reason += f" | {reentry_reason}"
+        elif reentry_reason == "" and sym in _LAST_LOSS:
+            # Checks passed but loss was recent — apply penalty before clearing
+            final_conf = max(0.0, final_conf - _LOSS_REENTRY_CONF_PENALTY)
+            rb_reason += f" | ReentryPenalty:-{_LOSS_REENTRY_CONF_PENALTY:.0%}"
 
     # Spread penalty: if spread exceeds 10% of ATR, reduce confidence proportionally
     if p.atr > 0 and p.spread > 0:
