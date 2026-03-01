@@ -669,9 +669,10 @@ void CallModalAI(SSymbolData &s) {
       SymbolInfoInteger(sym, SYMBOL_SPREAD) * 1.0,
       SymbolInfoDouble(sym, SYMBOL_BID),
       SymbolInfoDouble(sym, SYMBOL_ASK),
-      // Hour and day-of-week for time-based feature encoding
-      (int)TimeHour(TimeCurrent()),
-      (int)TimeDayOfWeek(TimeCurrent()),
+      // Hour and day-of-week for time-based feature encoding (MQL5 datetime struct)
+      MqlDateTime dt; TimeToStruct(TimeCurrent(), dt);
+      (int)dt.hour,
+      (int)dt.day_of_week,
       h_sigs, h_pnls, h_regs,
       (news_mins < Inp_News_Buffer_Min ? "true" : "false"),
       news_mins,
