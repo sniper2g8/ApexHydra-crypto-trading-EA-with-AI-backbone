@@ -436,9 +436,17 @@ with T[2]:
         if not ts_df.empty:
             fmt={c:(f"{{:.1f}}%" if c=="win_rate_pct" else "${:.2f}" if c=="total_pnl" else "{:.3f}")
                  for c in ["win_rate_pct","total_pnl","avg_ai_score","avg_confidence"] if c in ts_df.columns}
-            st.dataframe(ts_df.style.background_gradient(
-                subset=["win_rate_pct"] if "win_rate_pct" in ts_df.columns else [],cmap="RdYlGn").format(fmt),
-                use_container_width=True, hide_index=True)
+            def _color_wr(val):
+                try:
+                    v = float(val)
+                    r = max(0, min(255, int((100-v)*2.55)))
+                    g = max(0, min(255, int(v*2.55)))
+                    return f"background-color: rgba({r},{g},80,0.35); color: #f0f6fc"
+                except: return ""
+            styled = ts_df.style.format(fmt)
+            if "win_rate_pct" in ts_df.columns:
+                styled = styled.applymap(_color_wr, subset=["win_rate_pct"])
+            st.dataframe(styled, use_container_width=True, hide_index=True)
         else: ibox("Per-symbol stats appear after the first closed trade.")
     with cb:
         st.subheader("Win Rate Trend")
