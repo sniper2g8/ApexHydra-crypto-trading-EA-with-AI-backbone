@@ -11,7 +11,7 @@ import time, requests, json
 st.set_page_config(page_title=“ApexHydra v4.0”, page_icon=“⚡”, layout=“wide”,
 initial_sidebar_state=“expanded”)
 
-st.markdown(”””<style>
+st.markdown("""<style>
 html,body,.stApp{background:#ffffff;color:#1a1a2e}
 section[data-testid=“stSidebar”]{background:#f8f9fc !important;border-right:1px solid #e2e8f0}
 .block-container{padding-top:1.2rem;padding-bottom:2rem}
@@ -38,7 +38,7 @@ section[data-testid=“stSidebar”]{background:#f8f9fc !important;border-right:
 .stTabs [data-baseweb=“tab”]{color:#64748b;font-size:.82rem;border-radius:6px !important;padding:6px 14px}
 .stTabs [aria-selected=“true”]{background:#ffffff !important;color:#1a1a2e !important;box-shadow:0 1px 4px rgba(0,0,0,.08)}
 hr{border-color:#e2e8f0}
-</style>”””, unsafe_allow_html=True)
+</style>""", unsafe_allow_html=True)
 
 # ── Supabase ───────────────────────────────────────────────────────────
 
@@ -568,7 +568,7 @@ with T[6]:
 st.subheader(“📱 Telegram Bot”)
 tgl,tgr=st.columns([2,1])
 with tgl:
-st.markdown(”””**Quick Setup:**
+st.markdown("""**Quick Setup:**
 
 1. Message **@BotFather** → `/newbot` → copy token
 1. Get your Chat ID from **@userinfobot**
