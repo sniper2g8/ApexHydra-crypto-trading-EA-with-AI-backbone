@@ -351,7 +351,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### \U0001f4b0 Capital Allocation")
-    cap_val = float(c.get("trading_capital", 0) or 0) if c else 0.0
+    cap_val = float(c.get("trading_capital", 0) or c.get("allocated_capital", 0) or 0) if c else 0.0
     cap_pct = int(c.get("capital_pct", 100) or 100) if c else 100
     new_cap = st.number_input("Trading Capital ($)", 0.0, 1e6, cap_val, 100.0, format="%.2f", help="0 = full MT5 balance")
     new_pct = st.slider("Usable %", 10, 100, cap_pct)
@@ -496,7 +496,7 @@ else:
 
 # Capital budget banner
 if cfg_data:
-    tc = float(cfg_data.get("trading_capital", 0) or 0)
+    tc = float(cfg_data.get("trading_capital", 0) or cfg_data.get("allocated_capital", 0) or 0)
     if tc > 0:
         cp = float(cfg_data.get("capital_pct", 100) or 100)
         ibox(f"&#x1F4B0; <b>Capital Budget:</b> ${tc:,.2f} &times; {cp:.0f}% = <b>${tc * cp / 100:,.2f} effective</b>", "blue")
@@ -609,7 +609,7 @@ with T[2]:
                     return ""
             styled = ts_df.style.format(fmt)
             if "win_rate_pct" in ts_df.columns:
-                styled = styled.applymap(_color_wr, subset=["win_rate_pct"])
+                styled = styled.map(_color_wr, subset=["win_rate_pct"])
             st.dataframe(styled, use_container_width=True, hide_index=True)
         else:
             ibox("Per-symbol stats appear after the first closed trade.")
@@ -839,13 +839,13 @@ with T[7]:
                 f'<div class="kpi-val" style="color:{clr};font-size:1.1rem;">{val_}</div></div>',
                 unsafe_allow_html=True,
             )
-        bk(m1, "Trades",   res["total_trades"])
-        bk(m2, "Win Rate", f"{res['win_rate']*100:.1f}%",          res['win_rate'] >= .5)
-        bk(m3, "PnL",      f"${res['total_pnl']:+,.2f}",           res['total_pnl'] >= 0)
-        bk(m4, "Max DD",   f"{res['max_drawdown_pct']:.1f}%",      res['max_drawdown_pct'] <= 15)
-        bk(m5, "Sharpe",   f"{res['sharpe_ratio']:.2f}",           res['sharpe_ratio'] >= 1.0)
-        bk(m6, "PF",       f"{res['profit_factor']:.2f}",          res['profit_factor'] >= 1.5)
-        bk(m7, "Avg R:R",  f"{res.get('avg_rr', 0):.2f}",         res.get('avg_rr', 0) >= 1.0)
+        bk(m1, "Trades",   res.get("total_trades", 0))
+        bk(m2, "Win Rate", f"{res.get('win_rate', 0)*100:.1f}%",          res.get('win_rate', 0) >= .5)
+        bk(m3, "PnL",      f"${res.get('total_pnl', 0):+,.2f}",           res.get('total_pnl', 0) >= 0)
+        bk(m4, "Max DD",   f"{res.get('max_drawdown_pct', 0):.1f}%",      res.get('max_drawdown_pct', 100) <= 15)
+        bk(m5, "Sharpe",   f"{res.get('sharpe_ratio', 0):.2f}",           res.get('sharpe_ratio', 0) >= 1.0)
+        bk(m6, "PF",       f"{res.get('profit_factor', 0):.2f}",          res.get('profit_factor', 0) >= 1.5)
+        bk(m7, "Avg R:R",  f"{res.get('avg_rr', 0):.2f}",                 res.get('avg_rr', 0) >= 1.0)
         if res.get("equity_curve"):
             fig = go.Figure(go.Scatter(
                 y=res["equity_curve"], mode="lines",
@@ -862,10 +862,10 @@ with T[7]:
                 f"bt_{bsym}_{btf}.csv", "text/csv",
             )
 
-# ── Auto-refresh (non-blocking) ────────────────────────────────────────
+# ── Auto-refresh (blocking 15s then rerun) ─────────────────────────────
 if auto_refresh:
     # Use st.rerun with a placeholder instead of blocking sleep
     placeholder = st.empty()
     import time as _time
-    _time.sleep(15)
+    _time.sleep(15)  # blocking 15s then rerun
     st.rerun()

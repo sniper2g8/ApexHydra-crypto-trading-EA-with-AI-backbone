@@ -124,21 +124,22 @@ def _record_loss(symbol: str, regime: str, pnl: float):
 
 def _check_loss_reentry(symbol: str, regime_str: str, regime_conf: float) -> tuple[bool, str]:
     """
-    After a loss, validates whether re-entry is safe before allowing a new signal.
+    After a loss, blocks re-entry for 15 minutes then requires ≥70% regime confidence.
 
     Returns (blocked: bool, reason: str).
 
-    Three-stage check:
-      Stage 1 — Hard cooldown: block for 15 min regardless of regime.
+    Two-stage check:
+      Stage 1 — Hard cooldown: 15 min absolute block after any loss.
                  Prevents panic re-entries while the market is still moving.
-      Stage 2 — Regime consistency: need 7/10 recent readings to match current
-                 regime. Ensures the regime is a genuine sustained condition,
-                 not a single-candle blip that fooled the detector.
-      Stage 3 — Regime confidence: require ≥0.70 (not just min_confidence 0.55).
-                 Forces the signal to be high conviction before re-engaging.
+      Stage 2 — Regime confidence: require ≥0.70 regime confidence to re-enter.
+                 Filters low-conviction re-entries even after cooldown.
 
-    If all three pass, a confidence penalty is applied in _predict_inner as a
-    further cost for re-entering after a loss.
+    NOTE: Regime consistency check (7/10 same regime) was removed.
+    It relied on in-memory _REGIME_HISTORY which resets on every Modal container
+    restart, causing permanent WAIT blocks when a container cycled mid-session.
+    The 15-min cooldown + confidence gate is simpler and container-restart-safe.
+
+    If both pass, a confidence penalty is applied in _predict_inner.
     """
     loss_info = _LAST_LOSS.get(symbol)
     if not loss_info:
@@ -147,40 +148,20 @@ def _check_loss_reentry(symbol: str, regime_str: str, regime_conf: float) -> tup
     now     = datetime.now(timezone.utc)
     elapsed = (now - loss_info["ts"]).total_seconds()
 
-    # Stage 1: Hard cooldown
+    # Stage 1: Hard cooldown — 15 min, no exceptions
     if elapsed < _LOSS_HARD_COOLDOWN_SECS:
         remaining = int((_LOSS_HARD_COOLDOWN_SECS - elapsed) / 60)
         return True, f"LossCooldown:{remaining}min_remaining(pnl={loss_info['pnl']:.2f})"
 
-    # Cooldown passed — now validate regime before clearing the block
-    hist = list(_REGIME_HISTORY.get(symbol, []))
-
-    # Stage 2: Regime consistency — need 7/10 same regime
-    if len(hist) >= 10:
-        recent_10     = hist[:10]
-        same_regime   = sum(1 for _, r in recent_10 if r == regime_str)
-        if same_regime < _LOSS_REGIME_CONSISTENCY:
-            return True, (
-                f"ReentryBlocked:regime_unstable({same_regime}/10 {regime_str}) "
-                f"last_loss_regime={loss_info['regime']}"
-            )
-    elif len(hist) >= 5:
-        # Fewer readings — be stricter: require unanimous 5/5
-        same_regime = sum(1 for _, r in hist[:5] if r == regime_str)
-        if same_regime < 5:
-            return True, (
-                f"ReentryBlocked:regime_unstable({same_regime}/5 {regime_str})"
-            )
-
-    # Stage 3: Regime confidence threshold
+    # Stage 2: Regime confidence threshold
     if regime_conf < _LOSS_REGIME_MIN_CONF:
         return True, (
             f"ReentryBlocked:regime_conf_low({regime_conf:.0%} < {_LOSS_REGIME_MIN_CONF:.0%})"
         )
 
-    # All checks passed — clear the loss record so normal trading resumes
-    print(f"[REENTRY] {symbol} re-entry validated: regime={regime_str} "
-          f"conf={regime_conf:.0%} — clearing loss block")
+    # Passed — clear the loss block so normal trading resumes
+    print(f"[REENTRY] {symbol} re-entry cleared: regime={regime_str} "
+          f"conf={regime_conf:.0%} elapsed={elapsed/60:.1f}min")
     del _LAST_LOSS[symbol]
     return False, ""
 
@@ -978,7 +959,8 @@ def save_strategy_model(model, strategy: str):
     if os.path.exists(meta_path):
         try:
             with open(meta_path) as f: meta = json.load(f)
-        except: meta = {}
+        except Exception:
+            meta = {}
     meta["trained"]    = True
     meta["save_count"] = meta.get("save_count", 0) + 1
     meta["saved_at"]   = datetime.now(timezone.utc).isoformat()
@@ -994,7 +976,7 @@ def is_model_trained(strategy: str) -> bool:
     try:
         with open(meta_path) as f:
             return bool(json.load(f).get("trained", False))
-    except:
+    except Exception:
         return False
 
 
@@ -1005,6 +987,8 @@ def ppo_predict(model, obs: np.ndarray) -> tuple[str, float]:
     act_idx, _ = model.predict(obs_arr, state=None,
                                 episode_start=np.array([True]), deterministic=True)
     act_int = int(act_idx[0])
+    # Clamp to valid action space (BUY=0, SELL=1, NONE=2) to avoid IndexError/KeyError
+    act_int = max(0, min(2, act_int))
     # Confidence via action distribution
     try:
         with torch.no_grad():
@@ -1019,9 +1003,10 @@ def ppo_predict(model, obs: np.ndarray) -> tuple[str, float]:
             for _ in range(10):
                 a, _ = model.predict(obs_arr, state=None,
                                      episode_start=np.array([True]), deterministic=False)
-                votes[int(a[0])] += 1
+                idx = max(0, min(2, int(a[0])))
+                votes[idx] += 1
             conf = float(votes[act_int] / 10.0)
-        except:
+        except Exception:
             conf = 0.50
         print(f"[PPO] get_distribution failed ({e}) — sampling fallback conf={conf:.2f}")
     return {0: "BUY", 1: "SELL", 2: "NONE"}[act_int], conf
@@ -1048,6 +1033,8 @@ def compute_position(p: AIRequest, direction: str, confidence: float,
                      strategy: str) -> tuple[float, float, float, float, float, float, float]:
     """Returns: (lots, sl_price, tp_price, sl_atr_mult, tp_atr_mult, rr, tp_maturity)"""
     if direction == "NONE":
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    if not (p.bars.close and len(p.bars.close) > 0):
         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     is_buy = direction == "BUY"
@@ -1379,7 +1366,7 @@ async def train(request: FastAPIRequest):
     if auth_error: return auth_error
     try:
         msg = await request.json()
-    except:
+    except Exception:
         return JSONResponse({"ok": False, "reason": "invalid_json"}, status_code=400)
 
     strategy   = str(msg.get("strategy", "trend_following"))
@@ -1660,7 +1647,7 @@ async def post_log(request: FastAPIRequest):
     if auth_error: return auth_error
     try:
         msg = await request.json()
-    except:
+    except Exception:
         return JSONResponse({"ok": False, "reason": "invalid_json"}, status_code=400)
 
     level   = str(msg.get("level",   "INFO")).upper()[:10]
@@ -1733,13 +1720,15 @@ async def health():
         if os.path.exists(_meta_path(s)):
             try:
                 with open(_meta_path(s)) as f: meta = json.load(f)
-            except: pass
+            except Exception:
+                pass
         gb_trained = is_gb_trained(s)
         gb_meta = {}
         if os.path.exists(_gb_meta_path(s)):
             try:
                 with open(_gb_meta_path(s)) as f: gb_meta = json.load(f)
-            except: pass
+            except Exception:
+                pass
         model_status[s] = {
             "ppo_trained":    trained,
             "ppo_save_count": meta.get("save_count", 0),
@@ -1937,7 +1926,7 @@ def _due(state: dict, key: str, interval_hours: float) -> bool:
     try:
         last_dt = datetime.fromisoformat(last)
         return (datetime.now(timezone.utc) - last_dt).total_seconds() >= interval_hours * 3600
-    except:
+    except Exception:
         return True
 
 
@@ -1996,7 +1985,8 @@ def _run_news_monitor():
                 evt_time = datetime.fromisoformat(
                     evt["date"].replace("Z", "+00:00")
                 ).astimezone(timezone.utc)
-            except: continue
+            except Exception:
+                continue
             window_min = 30 if impact == "high" else 10
             window = timedelta(minutes=window_min)
             if abs(evt_time - now) <= window:
@@ -2217,7 +2207,7 @@ def is_gb_trained(strategy: str) -> bool:
     try:
         with open(path) as f:
             return bool(json.load(f).get("trained", False))
-    except:
+    except Exception:
         return False
 
 
@@ -2358,7 +2348,8 @@ def _run_online_learner():
                     with open(gb_meta_p) as f:
                         old_meta = json.load(f)
                     meta["save_count"] = old_meta.get("save_count", 0) + 1
-                except: pass
+                except Exception:
+                    pass
             with open(gb_meta_p, "w") as f:
                 json.dump(meta, f)
 

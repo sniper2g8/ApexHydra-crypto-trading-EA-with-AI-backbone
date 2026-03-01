@@ -108,6 +108,12 @@ def fmt_pct(v) -> str:
         return "N/A"
 
 
+def _dd_pct(perf_dict: dict) -> float:
+    """Return drawdown in percent (0–100). Handles DB storing it as fraction (0–1)."""
+    d = float(perf_dict.get("drawdown", 0) or 0)
+    return d * 100.0 if d <= 1.0 else d
+
+
 def db_get_config() -> dict:
     r = sb.table("ea_config").select("*").limit(1).execute()
     return r.data[0] if r.data else {}
@@ -319,7 +325,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     balance    = float(perf.get("balance",       0))
     equity     = float(perf.get("equity",        0))
-    dd         = float(perf.get("drawdown",      0))
+    dd         = _dd_pct(perf)
     tot_trades = int(perf.get("total_trades",    0))
     wins       = int(perf.get("wins",            0))
     losses     = int(perf.get("losses",          0))
@@ -370,7 +376,7 @@ async def cmd_perf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     balance   = float(perf.get("balance", 0))
     equity    = float(perf.get("equity", 0))
-    dd        = float(perf.get("drawdown", 0))
+    dd        = _dd_pct(perf)
     tot_t     = int(perf.get("total_trades", 0))
     wins      = int(perf.get("wins", 0))
     losses    = int(perf.get("losses", 0))
@@ -699,11 +705,17 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data == "ctrl_resume":
         ok = db_push_config({"halted": False, "paused": False})
-        await query.edit_message_text("▶️ EA <b>Resumed</b>.", parse_mode=ParseMode.HTML)
+        if ok:
+            await query.edit_message_text("▶️ EA <b>Resumed</b>.", parse_mode=ParseMode.HTML)
+        else:
+            await query.edit_message_text("❌ Failed to update config.", parse_mode=ParseMode.HTML)
 
     elif data == "ctrl_pause":
         ok = db_push_config({"paused": True})
-        await query.edit_message_text("⏸ EA <b>Paused</b>.", parse_mode=ParseMode.HTML)
+        if ok:
+            await query.edit_message_text("⏸ EA <b>Paused</b>.", parse_mode=ParseMode.HTML)
+        else:
+            await query.edit_message_text("❌ Failed to update config.", parse_mode=ParseMode.HTML)
 
     elif data == "ctrl_stop":
         keyboard = InlineKeyboardMarkup([[
@@ -729,7 +741,7 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         perf   = db_get_latest_performance()
         balance = float(perf.get("balance", 0))
         equity  = float(perf.get("equity", 0))
-        dd      = float(perf.get("drawdown", 0))
+        dd      = _dd_pct(perf)
         tot_t   = int(perf.get("total_trades", 0))
         wins    = int(perf.get("wins", 0))
         losses  = int(perf.get("losses", 0))
@@ -775,7 +787,7 @@ async def monitor_job(ctx: ContextTypes.DEFAULT_TYPE):
         if not perf:
             return
 
-        dd         = float(perf.get("drawdown", 0))
+        dd         = _dd_pct(perf)
         is_halted  = config.get("halted", False)
         perf_ts    = perf.get("timestamp", "")
 
@@ -909,7 +921,7 @@ async def daily_summary_job(ctx: ContextTypes.DEFAULT_TYPE):
 
         balance  = float(perf.get("balance", 0))
         equity   = float(perf.get("equity", 0))
-        dd       = float(perf.get("drawdown", 0))
+        dd       = _dd_pct(perf)
         tot_t    = int(perf.get("total_trades", 0))
         wins     = int(perf.get("wins", 0))
         losses   = int(perf.get("losses", 0))
