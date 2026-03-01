@@ -193,7 +193,7 @@ def kpi(col, label, value, sub="", color="kpi-neu"):
 col.markdown(f'<div class="kpi-card"><div class="kpi-label">{label}</div>'
 f'<div class="kpi-val {color}">{value}</div>'
 + (f'<div class="kpi-sub">{sub}</div>' if sub else "")
-+ ‘</div>', unsafe_allow_html=True)
++ '</div>', unsafe_allow_html=True)
 
 def dark(fig, title="", h=340):
 fig.update_layout(template="plotly_white",paper_bgcolor="#ffffff",plot_bgcolor="#f8f9fc",
@@ -355,7 +355,7 @@ render_kpis(float(cfg_data.get("live_balance",0) or 0), float(cfg_data.get("live
 float(cfg_data.get("live_dd_pct",0) or 0),
 int(cfg_data.get("live_trades",0) or 0),   int(cfg_data.get("live_wins",0) or 0),
 float(cfg_data.get("live_pnl",0) or 0),
-f"⚡ live · {cfg_data.get(‘live_ts','?')}")
+f"⚡ live · {cfg_data.get('live_ts','?')}")
 elif not perf_df.empty:
 l = perf_df.iloc[-1]
 render_kpis(float(l.get("balance",0) or 0), float(l.get("equity",0) or 0),
@@ -365,7 +365,7 @@ float(l.get("total_pnl",0) or 0), "⚠️ last snapshot (EA offline)")
 else:
 for col in kpis:
 col.markdown('<div class="kpi-card"><div class="kpi-label">—</div>'
-‘<div class="kpi-val" style="color:#94a3b8;font-size:2rem;">—</div></div>',
+'<div class="kpi-val" style="color:#94a3b8;font-size:2rem;">—</div></div>',
 unsafe_allow_html=True)
 reason = ("No ea_config row — set <code>Inp_DB_Enable=true</code> in EA inputs" if cfg_data is None
 else "EA hasn't sent live data yet — wait 15–30s after EA starts (check AutoTrading is ON)"
@@ -404,7 +404,7 @@ st.plotly_chart(dark(fig2,"Drawdown %",200), use_container_width=True)
 s1,s2,s3,s4 = st.columns(4)
 sb=float(ps.iloc[0]["balance"] or 0); eb=float(ps.iloc[-1]["balance"] or 0)
 s1.metric("Start Balance",f"${sb:,.2f}"); s2.metric("Current",f"${eb:,.2f}")
-s3.metric("Return",f"{((eb-sb)/sb*100 if sb>0 else 0):+.2f}%"); s4.metric("Max DD",f"{float(ps[‘drawdown'].max() or 0)*100:.2f}%")
+s3.metric("Return",f"{((eb-sb)/sb*100 if sb>0 else 0):+.2f}%"); s4.metric("Max DD",f"{float(ps['drawdown'].max() or 0)*100:.2f}%")
 else:
 ibox("📊 No performance snapshots yet. Ensure <code>Inp_DB_Enable=true</code> in EA inputs.","yellow")
 
@@ -521,7 +521,7 @@ if not rc2.empty:
 for _,row in rc2.iterrows():
 r=str(row.get("regime","Undefined")); col=RC.get(r,"#8b949e")
 ts=row["timestamp"].strftime("%m/%d %H:%M") if pd.notna(row.get("timestamp")) else "—"
-ev_row(ts,row.get("symbol","?"),f"{r} | ADX:{row.get(‘adx','—')} RSI:{row.get(‘rsi','—')}",col)
+ev_row(ts,row.get("symbol","?"),f"{r} | ADX:{row.get('adx','—')} RSI:{row.get('rsi','—')}",col)
 else: ibox("No regime changes recorded yet.")
 
 # ── T5 EA Logs ─────────────────────────────────────────────────────────
@@ -636,10 +636,10 @@ m1,m2,m3,m4,m5,m6,m7=st.columns(7)
 def bk(c,l,v,g=None):
 col="#16a34a" if g is True else("#dc2626" if g is False else "#2563eb")
 c.markdown(f'<div class="kpi-card"><div class="kpi-label">{l}</div><div class="kpi-val" style="color:{col};font-size:1.1rem;">{v}</div></div>',unsafe_allow_html=True)
-bk(m1,"Trades",res["total_trades"]); bk(m2,"Win Rate",f"{res[‘win_rate']*100:.1f}%",res[‘win_rate']>=.5)
-bk(m3,"PnL",f"${res[‘total_pnl']:+,.2f}",res[‘total_pnl']>=0); bk(m4,"Max DD",f"{res[‘max_drawdown_pct']:.1f}%",res[‘max_drawdown_pct']<=15)
-bk(m5,"Sharpe",f"{res[‘sharpe_ratio']:.2f}",res[‘sharpe_ratio']>=1.); bk(m6,"PF",f"{res[‘profit_factor']:.2f}",res[‘profit_factor']>=1.5)
-bk(m7,"Avg R:R",f"{res.get(‘avg_rr',0):.2f}",res.get(‘avg_rr',0)>=1.5)
+bk(m1,"Trades",res["total_trades"]); bk(m2,"Win Rate",f"{res['win_rate']*100:.1f}%",res['win_rate']>=.5)
+bk(m3,"PnL",f"${res['total_pnl']:+,.2f}",res['total_pnl']>=0); bk(m4,"Max DD",f"{res['max_drawdown_pct']:.1f}%",res['max_drawdown_pct']<=15)
+bk(m5,"Sharpe",f"{res['sharpe_ratio']:.2f}",res['sharpe_ratio']>=1.); bk(m6,"PF",f"{res['profit_factor']:.2f}",res['profit_factor']>=1.5)
+bk(m7,"Avg R:R",f"{res.get('avg_rr',0):.2f}",res.get('avg_rr',0)>=1.5)
 if res.get("equity_curve"):
 fig=go.Figure(go.Scatter(y=res["equity_curve"],mode="lines",line=dict(color="#2563eb",width=2),fill="tozeroy",fillcolor="rgba(37,99,235,.06)"))
 fig.add_hline(y=res["equity_curve"][0],line_dash="dot",line_color="#8b949e")
