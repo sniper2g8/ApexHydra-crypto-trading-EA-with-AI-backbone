@@ -1195,17 +1195,42 @@ async def _predict_inner(p: AIRequest):
         _REGIME_HISTORY[sym] = deque(maxlen=_REGIME_HISTORY_MAXLEN)
     _REGIME_HISTORY[sym].appendleft((datetime.now(timezone.utc), regime_str))
 
-    # ── Loss detection: record if the most recent outcome was a loss ──────────
-    # recent_outcomes is a list of PnL floats sent by the EA (most recent first).
-    # We track the LAST known outcome per symbol and record a loss when a new
-    # negative outcome appears — this fires once per loss, not on every tick.
-    if p.recent_outcomes:
-        last_pnl = p.recent_outcomes[0]   # most recent closed trade PnL
-        prev_loss = _LAST_LOSS.get(sym)
-        # Record if: it's a loss AND (no previous loss recorded, OR it's a newer loss)
-        if last_pnl < 0:
-            if not prev_loss or abs(prev_loss["pnl"] - last_pnl) > 0.01:
-                _record_loss(sym, regime_str, last_pnl)
+    # ── Loss detection: query Supabase directly ───────────────────────────────
+    # DO NOT rely on p.recent_outcomes — the EA fetches that list before calling
+    # /predict, so a loss that just closed (seconds ago) won't be in it yet.
+    # Instead query the trades table directly for the most recent CLOSE on this
+    # symbol so the cooldown fires immediately on the next predict call.
+    try:
+        from supabase import create_client as _sb_loss
+        _sb = _sb_loss(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+        last_close = (
+            _sb.table("trades")
+            .select("pnl,regime,timestamp")
+            .eq("symbol", sym)
+            .eq("action", "CLOSE")
+            .order("timestamp", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if last_close:
+            last_pnl  = float(last_close[0].get("pnl") or 0)
+            last_ts   = last_close[0].get("timestamp", "")
+            prev_loss = _LAST_LOSS.get(sym)
+            if last_pnl < 0:
+                # Record if no previous loss stored, or this is a different (newer) loss
+                if not prev_loss or prev_loss.get("db_ts") != last_ts:
+                    _record_loss(sym, regime_str, last_pnl)
+                    _LAST_LOSS[sym]["db_ts"] = last_ts   # store DB ts to detect new losses
+    except Exception as _le:
+        # Non-fatal — fall back to recent_outcomes if DB query fails
+        if p.recent_outcomes:
+            last_pnl  = p.recent_outcomes[0]
+            prev_loss = _LAST_LOSS.get(sym)
+            if last_pnl < 0:
+                if not prev_loss or abs(prev_loss["pnl"] - last_pnl) > 0.01:
+                    _record_loss(sym, regime_str, last_pnl)
+        print(f"[REENTRY] DB loss check failed ({_le}), used recent_outcomes fallback")
 
     # Rule-based strategy signal
     rb_direction, rb_conf, rb_reason = STRATEGY_FN[strategy](p)
