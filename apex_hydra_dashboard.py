@@ -1,6 +1,6 @@
 ""
 ApexHydra Crypto v4.2 Streamlit Dashboard (Redesign)
-Dark-mode UI · Live KPIs with diagnostics · 8 tabs · EA Logs tab
+Dark-mode UI Live KPIs with diagnostics 8 tabs · EA Logs tab
 ""
 import streamlit as st, pandas as pd, plotly.graph_objects as go
 import plotly.express as px
