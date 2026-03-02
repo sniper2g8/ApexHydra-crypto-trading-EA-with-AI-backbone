@@ -112,14 +112,26 @@ _LOSS_MAX_COOLDOWN_SECS   = 1800   # after 60 min, clear loss and allow re-entry
 _LOSS_REENTRY_CONF_PENALTY= 0.08   # confidence penalty applied even after passing checks
 
 
-def _record_loss(symbol: str, regime: str, pnl: float):
-    """Called when a loss is detected. Records timestamp for cooldown tracking."""
+def _parse_loss_ts(ts_str: str | None) -> datetime | None:
+    """Parse DB timestamp (ISO) to UTC datetime for cooldown. Returns None on failure."""
+    if not ts_str:
+        return None
+    try:
+        s = str(ts_str).replace("Z", "+00:00").strip()
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+
+def _record_loss(symbol: str, regime: str, pnl: float, loss_time_utc: datetime | None = None):
+    """Called when a loss is detected. Uses actual close time from DB when available so cooldown doesn't reset on container restart."""
+    ts = loss_time_utc if (loss_time_utc is not None and getattr(loss_time_utc, "tzinfo", None)) else datetime.now(timezone.utc)
     _LAST_LOSS[symbol] = {
-        "ts":     datetime.now(timezone.utc),
+        "ts":     ts,
         "regime": regime,
         "pnl":    pnl,
     }
-    print(f"[REENTRY] Loss recorded for {symbol}: pnl={pnl:.2f} regime={regime}")
+    print(f"[REENTRY] Loss recorded for {symbol}: pnl={pnl:.2f} regime={regime} at {ts}")
 
 
 def _check_loss_reentry(symbol: str, regime_str: str, regime_conf: float) -> tuple[bool, str]:
@@ -1201,7 +1213,8 @@ async def _predict_inner(p: AIRequest):
             if last_pnl < 0:
                 # Record if no previous loss stored, or this is a different (newer) loss
                 if not prev_loss or prev_loss.get("db_ts") != last_ts:
-                    _record_loss(sym, regime_str, last_pnl)
+                    loss_dt = _parse_loss_ts(last_ts)  # use actual close time so cooldown doesn't reset
+                    _record_loss(sym, regime_str, last_pnl, loss_dt)
                     _LAST_LOSS[sym]["db_ts"] = last_ts   # store DB ts to detect new losses
     except Exception as _le:
         # Non-fatal — fall back to recent_outcomes if DB query fails
