@@ -61,6 +61,7 @@ input bool          Inp_UseTrail      = true;
 input double        Inp_Trail_ATR     = 1.5;
 input bool          Inp_UseBE         = true;
 input double        Inp_BE_RR         = 1.0;
+input bool          Inp_UseHalfTP_Lock= true;  // If price reaches 50% of TP, move SL to 50% of TP (locks profit)
 input int           Inp_Magic         = 20250228;
 input int           Inp_Slippage      = 30;
 
@@ -846,6 +847,44 @@ void ManagePositions() {
             double nsl = buy ? open+pt : open-pt;
             if(buy && nsl > sl)   g_trade.PositionModify(g_pos.Ticket(), nsl, tp);
             if(!buy && nsl < sl)  g_trade.PositionModify(g_pos.Ticket(), nsl, tp);
+         }
+      }
+
+      // Half-TP profit lock:
+      // If price has moved >= 50% of the distance to TP, move SL to the midpoint
+      // between open and TP (so even a reversal should close green, broker allowing).
+      if(Inp_UseHalfTP_Lock && tp > 0) {
+         double dist_to_tp = buy ? (tp - open) : (open - tp);
+         if(dist_to_tp > 0) {
+            double moved = buy ? (price - open) : (open - price);
+            double prog  = moved / dist_to_tp;
+            if(prog >= 0.5) {
+               double target_sl = open + (tp - open) * 0.5; // midpoint works for both BUY and SELL
+
+               // Respect stops/freeze levels (best-effort guard)
+               double pt = SymbolInfoDouble(sym, SYMBOL_POINT);
+               long stops = (long)SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
+               long freeze = (long)SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL);
+               double min_dist = (double)MathMax(stops, freeze) * pt;
+
+               if(buy) {
+                  // SL must be below current price by min_dist (otherwise broker rejects)
+                  if((sl == 0 || target_sl > sl) && target_sl < price - min_dist) {
+                     if(!g_trade.PositionModify(g_pos.Ticket(), target_sl, tp)) {
+                        Log(sym + " SL lock failed: " + IntegerToString(g_trade.ResultRetcode()) +
+                            " [" + g_trade.ResultRetcodeDescription() + "]");
+                     }
+                  }
+               } else {
+                  // For SELL, SL must be above current price by min_dist
+                  if((sl == 0 || target_sl < sl) && target_sl > price + min_dist) {
+                     if(!g_trade.PositionModify(g_pos.Ticket(), target_sl, tp)) {
+                        Log(sym + " SL lock failed: " + IntegerToString(g_trade.ResultRetcode()) +
+                            " [" + g_trade.ResultRetcodeDescription() + "]");
+                     }
+                  }
+               }
+            }
          }
       }
 
