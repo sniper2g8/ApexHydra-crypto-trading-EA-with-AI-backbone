@@ -52,7 +52,7 @@ input group "━━━━━ RISK (defaults — overridden by Supabase config) �
 input double        Inp_Risk_Pct      = 1.0;
 input double        Inp_MaxDD_Pct     = 20.0;
 input int           Inp_Max_Pos       = 3;
-input double        Inp_Min_Conf      = 0.75;  // raised from 0.55 — crypto needs high-conviction signals only
+input double        Inp_Min_Conf      = 0.52;  // relaxed for more trades / GB training (dashboard can override)
 input double        Inp_Min_RR        = 1.0;  // lowered from 1.4 — trend_following TP=2.2x/SL=2.2x gives R:R=1.0 by design
 input int           Inp_FailCooldown_Min = 30; // Minutes to wait after a failed order before retrying same symbol
 

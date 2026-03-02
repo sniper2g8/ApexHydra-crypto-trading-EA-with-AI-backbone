@@ -99,17 +99,17 @@ REGIME_NAMES = {0: "Trend Bull", 1: "Trend Bear", 2: "Ranging", 3: "High Volatil
 _REGIME_HISTORY: dict      = {}     # symbol → deque[(datetime, regime_str)]
 _REGIME_HISTORY_MAXLEN     = 30
 _CONTAINER_START: datetime = datetime.now(timezone.utc)
-_MR_WARMUP_SECS            = 900    # 15 min warm-up before MR is fully trusted
+_MR_WARMUP_SECS            = 300    # 5 min warm-up (relaxed for more trades)
 _seeded_symbols: set       = set()
 
 # ── Loss re-entry tracker ─────────────────────────────────────────────
 # Records the last loss timestamp + regime per symbol so _predict_inner
 # can apply a cooldown and regime validation before re-entering.
 _LAST_LOSS: dict = {}   # symbol → {"ts": datetime, "regime": str, "pnl": float}
-_LOSS_HARD_COOLDOWN_SECS  = 300    # 5 min absolute block after a loss (relaxed for more trades / GB training)
-_LOSS_REGIME_MIN_CONF     = 0.50   # minimum regime confidence to re-enter (was 0.70 — crypto often 50–60%, caused permanent block)
-_LOSS_MAX_COOLDOWN_SECS   = 1800   # after 60 min, clear loss and allow re-entry regardless of regime
-_LOSS_REENTRY_CONF_PENALTY= 0.08   # confidence penalty applied even after passing checks
+_LOSS_HARD_COOLDOWN_SECS  = 120    # 2 min absolute block after a loss (relaxed for more trades / GB training)
+_LOSS_REGIME_MIN_CONF     = 0.38   # minimum regime confidence to re-enter (relaxed for more trades)
+_LOSS_MAX_COOLDOWN_SECS   = 1800   # after 30 min, clear loss and allow re-entry regardless of regime
+_LOSS_REENTRY_CONF_PENALTY= 0.04   # confidence penalty (reduced for more trades)
 
 
 def _parse_loss_ts(ts_str: str | None) -> datetime | None:
@@ -777,9 +777,9 @@ def classify_regime_granular(p: AIRequest, regime: str, features: np.ndarray) ->
 # ──────────────────────────────────────────────────────────────────────
 
 # Minimum ADX for trend-following (relaxed to 18 for more trades / GB training)
-_TF_ADX_MIN = 18.0
-# Confluence threshold (relaxed to 0.60 for more trades / GB training)
-_TF_CONFLUENCE_MIN = 0.60
+_TF_ADX_MIN = 15.0   # relaxed for more trades
+# Confluence threshold (relaxed to 0.55 for more trades / GB training)
+_TF_CONFLUENCE_MIN = 0.55
 
 
 def signal_trend_following(p: AIRequest) -> tuple[str, float, str]:
@@ -864,9 +864,9 @@ def signal_mean_reversion(p: AIRequest) -> tuple[str, float, str]:
 
     t = sb + se
     if t == 0: return "NONE", 0.0, "no_signal"
-    # Confluence 0.60 (relaxed for more trades / GB training)
-    if sb > se and sb / t >= 0.60: return "BUY",  round(min(sb / t, 0.99), 4), "MR:" + ",".join(votes)
-    if se > sb and se / t >= 0.60: return "SELL", round(min(se / t, 0.99), 4), "MR:" + ",".join(votes)
+    # Confluence 0.55 (relaxed for more trades / GB training)
+    if sb > se and sb / t >= 0.55: return "BUY",  round(min(sb / t, 0.99), 4), "MR:" + ",".join(votes)
+    if se > sb and se / t >= 0.55: return "SELL", round(min(se / t, 0.99), 4), "MR:" + ",".join(votes)
     return "NONE", 0.0, "low_confluence"
 
 
@@ -899,9 +899,9 @@ def signal_breakout(p: AIRequest) -> tuple[str, float, str]:
 
     t = sb + se
     if t == 0: return "NONE", 0.0, "no_breakout"
-    # Confluence 0.65 (relaxed for more trades / GB training)
-    if sb > se and sb / t >= 0.65: return "BUY",  round(min(sb / t, 0.99), 4), "BO:" + ",".join(votes)
-    if se > sb and se / t >= 0.65: return "SELL", round(min(se / t, 0.99), 4), "BO:" + ",".join(votes)
+    # Confluence 0.58 (relaxed for more trades / GB training)
+    if sb > se and sb / t >= 0.58: return "BUY",  round(min(sb / t, 0.99), 4), "BO:" + ",".join(votes)
+    if se > sb and se / t >= 0.58: return "SELL", round(min(se / t, 0.99), 4), "BO:" + ",".join(votes)
     return "NONE", 0.0, "low_confluence"
 
 
@@ -912,7 +912,7 @@ STRATEGY_FN = {
 }
 
 # When primary strategy returns NONE, try others and use best signal (more trades for GB training)
-_FALLBACK_MIN_CONF = 0.50
+_FALLBACK_MIN_CONF = 0.42
 
 
 def _rb_with_fallback(p: AIRequest, primary_strategy: str) -> tuple[str, float, str, str]:
@@ -1307,31 +1307,29 @@ async def _predict_inner(p: AIRequest):
             final_conf = ppo_conf * 0.60
             ml_source  = "ppo_solo_fallback"
 
-    # Regime-confidence gate (relaxed to 42% for more trades / GB training)
-    if final_dir != "NONE" and regime_conf < 0.42:
+    # Regime-confidence gate (relaxed to 30% for more trades / GB training)
+    if final_dir != "NONE" and regime_conf < 0.30:
         final_dir  = "NONE"
         final_conf = 0.0
-        rb_reason += f" | RegimeGate:conf({regime_conf:.0%})<42%"
+        rb_reason += f" | RegimeGate:conf({regime_conf:.0%})<30%"
 
     # Mean-reversion trending block:
-    # During the warm-up period or while regime has been persistently TRENDING,
-    # suppress MR signals to avoid fading strong moves.
-    # Requires 9 of the last 12 regime readings to be TRENDING (majority, not unanimous)
-    # — gives resilience to brief ranging candles within strong trends.
+    # Only suppress MR when trend is very persistent (relaxed for more trades).
+    # Requires 10 of last 12 TRENDING (was 9); short-history block requires 6/6 (was 5/5).
     if strategy_used == "mean_reversion" and final_dir != "NONE":
         warmup_ok = (datetime.now(timezone.utc) - _CONTAINER_START).total_seconds() > _MR_WARMUP_SECS
         hist      = list(_REGIME_HISTORY.get(sym, []))
         if warmup_ok and len(hist) >= 12:
             trending_count = sum(1 for _, r in hist[:12] if r == "TRENDING")
-            if trending_count >= 9:   # 75% of last 12 readings = persistent trend
+            if trending_count >= 10:   # only block when 10/12 = very persistent trend
                 final_dir  = "NONE"
                 final_conf = 0.0
                 rb_reason  += f" | MR_BLOCKED:trending({trending_count}/12)"
-        elif warmup_ok and len(hist) >= 5 and all(r == "TRENDING" for _, r in hist[:5]):
-            # Fallback: unanimous 5/5 block when history is short
+        elif warmup_ok and len(hist) >= 6 and all(r == "TRENDING" for _, r in hist[:6]):
+            # Fallback: 6/6 unanimous block when history is short
             final_dir  = "NONE"
             final_conf = 0.0
-            rb_reason  += " | MR_BLOCKED:trending(5/5)"
+            rb_reason  += " | MR_BLOCKED:trending(6/6)"
 
     # Block if news
     if news_blocked:
@@ -1354,11 +1352,11 @@ async def _predict_inner(p: AIRequest):
             final_conf = max(0.0, final_conf - _LOSS_REENTRY_CONF_PENALTY)
             rb_reason += f" | ReentryPenalty:-{_LOSS_REENTRY_CONF_PENALTY:.0%}"
 
-    # Spread penalty: if spread exceeds 10% of ATR, reduce confidence proportionally
+    # Spread penalty: only if spread exceeds 15% of ATR (relaxed for more trades)
     if p.atr > 0 and p.spread > 0:
         spread_atr_ratio = (p.spread * p.point) / p.atr if p.point > 0 else 0
-        if spread_atr_ratio > 0.10:
-            penalty = min(0.15, (spread_atr_ratio - 0.10) * 1.5)
+        if spread_atr_ratio > 0.15:
+            penalty = min(0.10, (spread_atr_ratio - 0.15) * 1.0)
             final_conf = max(0.0, final_conf - penalty)
             rb_reason += f" | SpreadPenalty:{penalty:.2f}"
 
