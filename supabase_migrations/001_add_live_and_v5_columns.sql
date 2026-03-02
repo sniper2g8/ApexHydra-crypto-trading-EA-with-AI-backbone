@@ -29,3 +29,4 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS closed_at      TIMESTAMPTZ;
 ALTER TABLE regime_changes ADD COLUMN IF NOT EXISTS regime_broad  TEXT;
 ALTER TABLE regime_changes ADD COLUMN IF NOT EXISTS regime_id     INTEGER;
 ALTER TABLE regime_changes ADD COLUMN IF NOT EXISTS strategy_used TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS feature_vector TEXT;

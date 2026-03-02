@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS trades (
     won            BOOLEAN,
     magic          INTEGER,
     closed_at      TIMESTAMPTZ,
-    timestamp      TIMESTAMPTZ DEFAULT NOW()
+    timestamp      TIMESTAMPTZ DEFAULT NOW(),
+    feature_vector TEXT                   -- JSON array of 38 floats for GB training (EA fills on OPEN/CLOSE)
 );
 CREATE INDEX idx_trades_sym  ON trades(symbol);
 CREATE INDEX idx_trades_ts   ON trades(timestamp DESC);

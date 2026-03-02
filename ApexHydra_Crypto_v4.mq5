@@ -121,6 +121,9 @@ struct SSymbolData {
    datetime last_scan;
    datetime last_fail;       // last failed order attempt — for retry cooldown
    bool     ai_ok;           // last Modal call succeeded?
+   // For GB training: feature vector at open (saved when position opens, sent on CLOSE)
+   string   feature_vector_str;      // from last /predict response
+   string   feature_vector_at_open;  // snapshot when we opened (used when logging CLOSE)
 };
 
 // Runtime config (pulled from Supabase ea_config table)
@@ -754,6 +757,14 @@ void CallModalAI(SSymbolData &s) {
    s.ai_rr         = JSONGetDbl(json,      "rr_ratio");
    s.ai_reasoning  = JSONGetStr(json,      "reasoning");
 
+   // Feature vector for GB training (38 floats) — extract "[...]" from response
+   int fv_start = StringFind(json, "\"feature_vector\":[");
+   if(fv_start >= 0) {
+      int from = fv_start + 18;  // length of "feature_vector":[
+      int to   = StringFind(json, "]", from);
+      if(to > from) s.feature_vector_str = StringSubstr(json, from, to - from + 1);
+   }
+
    // Apply minimum confidence filter from config
    if(s.confidence < g_cfg.min_confidence) s.signal = 0;
 
@@ -834,6 +845,7 @@ void ExecuteTrade(SSymbolData &s) {
       s.pos_sl    = s.ai_sl;
       s.pos_tp    = s.ai_tp;
       s.pos_time  = TimeCurrent();
+      s.feature_vector_at_open = s.feature_vector_str;  // for GB: use at CLOSE
       g_total_trades++;
 
       Log("OPEN " + s.symbol + " " + (is_buy?"BUY":"SELL") +
@@ -1128,6 +1140,10 @@ bool DBPost(string table, string json_body) {
 }
 
 void DBLogTrade(const SSymbolData &s, string action, double price, double pnl) {
+   // feature_vector: for GB training (OPEN = current response; CLOSE = snapshot at open)
+   string fv = (action == "OPEN") ? s.feature_vector_str : s.feature_vector_at_open;
+   string fv_part = (StringLen(fv) > 0) ? ",\"feature_vector\":\"" + fv + "\"" : "";
+
    // `regime`       = s.regime_name  (e.g. "Trend Bull") — granular label
    // `regime_broad` = s.regime_broad (e.g. "TRENDING")   — strategy-level label
    // `ai_score`     = s.ai_rr        (R:R ratio from Modal — used as quality score)
@@ -1144,7 +1160,7 @@ void DBLogTrade(const SSymbolData &s, string action, double price, double pnl) {
       "\"ppo_signal\":\"%s\",\"ppo_confidence\":%.4f,"
       "\"lots\":%.4f,\"price\":%.5f,\"sl\":%.5f,\"tp\":%.5f,"
       "\"pnl\":%.2f,\"won\":%s,\"magic\":%d,"
-      "\"closed_at\":%s,\"timestamp\":\"%s\"}",
+      "\"closed_at\":%s,\"timestamp\":\"%s\"%s}",
       s.symbol, action,
       s.regime_name, s.regime_broad, s.regime_id,
       s.strategy_used,
@@ -1155,7 +1171,8 @@ void DBLogTrade(const SSymbolData &s, string action, double price, double pnl) {
       (pnl > 0 ? "true" : (pnl < 0 ? "false" : "null")),
       Inp_Magic,
       closed_at_str,
-      TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS)
+      TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+      fv_part
    );
    DBPost("trades", json);
 }

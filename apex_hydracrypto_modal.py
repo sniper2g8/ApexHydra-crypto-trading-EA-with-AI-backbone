@@ -254,6 +254,7 @@ class AIResponse(BaseModel):
     rr_ratio:       float
     tp_maturity:    float  = 0.0   # 0.0=bootstrap tight TP, 1.0=fully mature wide TP
     feature_scores: dict
+    feature_vector: list[float] = []  # 38-dim raw features for GB training (EA stores on trade log)
     reasoning:      str
     news_blocked:   bool   = False
     model_trained:  bool   = False
@@ -775,10 +776,16 @@ def classify_regime_granular(p: AIRequest, regime: str, features: np.ndarray) ->
 #  SECTION 4 — STRATEGY ENGINES  (crypto-tuned)
 # ──────────────────────────────────────────────────────────────────────
 
+# Minimum ADX for trend-following (avoids weak/choppy trends → fewer false signals)
+_TF_ADX_MIN = 20.0
+# Confluence threshold: higher = fewer but more accurate signals (was 0.60)
+_TF_CONFLUENCE_MIN = 0.65
+
+
 def signal_trend_following(p: AIRequest) -> tuple[str, float, str]:
     """
     EMA stack + MACD histogram + ADX + volume confirmation.
-    Crypto-tuned: volume check uses 0.75× avg (lower bar than forex 0.8×).
+    Accuracy: require ADX >= 20 and confluence >= 65% so only clear trends trigger.
     """
     c = list(reversed(p.bars.close[:60]))
     v = list(reversed(p.bars.volume[:60]))
@@ -792,9 +799,13 @@ def signal_trend_following(p: AIRequest) -> tuple[str, float, str]:
     adx       = p.adx
     cur_close = c[-1]
 
+    # ADX floor: no signal in weak/choppy trend (improves accuracy)
+    if adx < _TF_ADX_MIN:
+        return "NONE", 0.0, f"TF:adx_below_{_TF_ADX_MIN:.0f}"
+
     avg_vol = sum(v[-20:]) / max(len(v[-20:]), 1) if v else 1
     cur_vol = v[-1] if v else avg_vol
-    vol_ok  = cur_vol >= avg_vol * 0.75    # 0.75 for crypto (lower baseline)
+    vol_ok  = cur_vol >= avg_vol * 0.75
 
     sb = se = 0.0
     if ema8 > ema21 > ema50: sb += 0.30
@@ -806,7 +817,6 @@ def signal_trend_following(p: AIRequest) -> tuple[str, float, str]:
     f = 0.5 + 0.5 * min(adx / 50.0, 1.0)
     sb *= f; se *= f
 
-    # HTF confirmation bonus
     if p.htf_ema50 > p.htf_ema200: sb *= 1.10
     if p.htf_ema50 < p.htf_ema200: se *= 1.10
 
@@ -816,8 +826,8 @@ def signal_trend_following(p: AIRequest) -> tuple[str, float, str]:
     t = sb + se
     if t == 0: return "NONE", 0.0, "no_signal"
     vtag = "vol_ok" if vol_ok else "vol_low"
-    if sb > se and sb/t > 0.60: return "BUY",  round(sb/t, 4), f"TF:adx={adx:.0f},{vtag}"
-    if se > sb and se/t > 0.60: return "SELL", round(se/t, 4), f"TF:adx={adx:.0f},{vtag}"
+    if sb > se and sb / t >= _TF_CONFLUENCE_MIN: return "BUY",  round(sb / t, 4), f"TF:adx={adx:.0f},{vtag}"
+    if se > sb and se / t >= _TF_CONFLUENCE_MIN: return "SELL", round(se / t, 4), f"TF:adx={adx:.0f},{vtag}"
     return "NONE", 0.0, "low_confluence"
 
 
@@ -854,8 +864,9 @@ def signal_mean_reversion(p: AIRequest) -> tuple[str, float, str]:
 
     t = sb + se
     if t == 0: return "NONE", 0.0, "no_signal"
-    if sb > se and sb/t > 0.62: return "BUY",  round(min(sb/t, 0.99), 4), "MR:"+",".join(votes)
-    if se > sb and se/t > 0.62: return "SELL", round(min(se/t, 0.99), 4), "MR:"+",".join(votes)
+    # Stricter confluence (0.65) for more accurate mean-reversion entries
+    if sb > se and sb / t >= 0.65: return "BUY",  round(min(sb / t, 0.99), 4), "MR:" + ",".join(votes)
+    if se > sb and se / t >= 0.65: return "SELL", round(min(se / t, 0.99), 4), "MR:" + ",".join(votes)
     return "NONE", 0.0, "low_confluence"
 
 
@@ -888,8 +899,9 @@ def signal_breakout(p: AIRequest) -> tuple[str, float, str]:
 
     t = sb + se
     if t == 0: return "NONE", 0.0, "no_breakout"
-    if sb > se and sb/t > 0.65: return "BUY",  round(min(sb/t, 0.99), 4), "BO:"+",".join(votes)
-    if se > sb and se/t > 0.65: return "SELL", round(min(se/t, 0.99), 4), "BO:"+",".join(votes)
+    # Stricter confluence (0.68) to reduce false breakouts
+    if sb > se and sb / t >= 0.68: return "BUY",  round(min(sb / t, 0.99), 4), "BO:" + ",".join(votes)
+    if se > sb and se / t >= 0.68: return "SELL", round(min(se / t, 0.99), 4), "BO:" + ",".join(votes)
     return "NONE", 0.0, "low_confluence"
 
 
@@ -1272,6 +1284,12 @@ async def _predict_inner(p: AIRequest):
             final_conf = ppo_conf * 0.60
             ml_source  = "ppo_solo_fallback"
 
+    # Regime-confidence gate: don't trade when regime is ambiguous (improves accuracy)
+    if final_dir != "NONE" and regime_conf < 0.55:
+        final_dir  = "NONE"
+        final_conf = 0.0
+        rb_reason += f" | RegimeGate:conf({regime_conf:.0%})<55%"
+
     # Mean-reversion trending block:
     # During the warm-up period or while regime has been persistently TRENDING,
     # suppress MR signals to avoid fading strong moves.
@@ -1357,6 +1375,7 @@ async def _predict_inner(p: AIRequest):
         rr_ratio       = rr,
         tp_maturity    = tp_mat,
         feature_scores = feature_scores,
+        feature_vector = features[:OBS_DIM].tolist(),
         reasoning      = reasoning,
         news_blocked   = news_blocked,
         model_trained  = ppo_trained,
@@ -2237,7 +2256,25 @@ def _run_online_learner():
         print(f"[LEARNER] DB read failed: {e}"); return
 
     # Filter to rows that have stored feature vectors
-    rows_with_fv = [r for r in rows if r.get("feature_vector") and len(r.get("feature_vector", [])) >= 34]
+    def to_fv(row):
+        fv = row.get("feature_vector")
+        if fv is None: return None
+        if isinstance(fv, list) and len(fv) >= 34: return fv
+        if isinstance(fv, str) and fv:
+            try:
+                import json as _json
+                arr = _json.loads(fv)
+                return arr if isinstance(arr, list) and len(arr) >= 34 else None
+            except Exception:
+                return None
+        return None
+
+    rows_with_fv = []
+    for r in rows:
+        fv = to_fv(r)
+        if fv is not None:
+            r["_fv"] = fv
+            rows_with_fv.append(r)
     rows_without = len(rows) - len(rows_with_fv)
 
     if len(rows) < 20:
@@ -2273,7 +2310,7 @@ def _run_online_learner():
             # Build feature matrix and labels
             X_list, y_list = [], []
             for r in strategy_rows:
-                fv  = r.get("feature_vector", [])
+                fv  = r.get("_fv") or r.get("feature_vector", [])
                 pnl = float(r.get("pnl", 0) or 0)
                 sig = int(r.get("signal", 0) or 0)
 
