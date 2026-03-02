@@ -107,8 +107,8 @@ _seeded_symbols: set       = set()
 # can apply a cooldown and regime validation before re-entering.
 _LAST_LOSS: dict = {}   # symbol → {"ts": datetime, "regime": str, "pnl": float}
 _LOSS_HARD_COOLDOWN_SECS  = 900    # 15 min absolute block after a loss
-_LOSS_REGIME_MIN_CONF     = 0.70   # minimum regime confidence required to re-enter
-_LOSS_REGIME_CONSISTENCY  = 7      # need 7 of last 10 readings same regime
+_LOSS_REGIME_MIN_CONF     = 0.50   # minimum regime confidence to re-enter (was 0.70 — crypto often 50–60%, caused permanent block)
+_LOSS_MAX_COOLDOWN_SECS   = 1800   # after 60 min, clear loss and allow re-entry regardless of regime
 _LOSS_REENTRY_CONF_PENALTY= 0.08   # confidence penalty applied even after passing checks
 
 
@@ -124,22 +124,10 @@ def _record_loss(symbol: str, regime: str, pnl: float):
 
 def _check_loss_reentry(symbol: str, regime_str: str, regime_conf: float) -> tuple[bool, str]:
     """
-    After a loss, blocks re-entry for 15 minutes then requires ≥70% regime confidence.
+    After a loss: 15 min hard cooldown, then require ≥50% regime confidence to re-enter.
+    After 60 min from loss, allow re-entry regardless (avoid permanent block).
 
     Returns (blocked: bool, reason: str).
-
-    Two-stage check:
-      Stage 1 — Hard cooldown: 15 min absolute block after any loss.
-                 Prevents panic re-entries while the market is still moving.
-      Stage 2 — Regime confidence: require ≥0.70 regime confidence to re-enter.
-                 Filters low-conviction re-entries even after cooldown.
-
-    NOTE: Regime consistency check (7/10 same regime) was removed.
-    It relied on in-memory _REGIME_HISTORY which resets on every Modal container
-    restart, causing permanent WAIT blocks when a container cycled mid-session.
-    The 15-min cooldown + confidence gate is simpler and container-restart-safe.
-
-    If both pass, a confidence penalty is applied in _predict_inner.
     """
     loss_info = _LAST_LOSS.get(symbol)
     if not loss_info:
@@ -148,12 +136,18 @@ def _check_loss_reentry(symbol: str, regime_str: str, regime_conf: float) -> tup
     now     = datetime.now(timezone.utc)
     elapsed = (now - loss_info["ts"]).total_seconds()
 
+    # Max cooldown: after 60 min, clear and allow re-entry (crypto regimes often 50–60%, 70% was too strict)
+    if elapsed >= _LOSS_MAX_COOLDOWN_SECS:
+        print(f"[REENTRY] {symbol} loss block expired after {elapsed/60:.0f}min — cleared")
+        del _LAST_LOSS[symbol]
+        return False, ""
+
     # Stage 1: Hard cooldown — 15 min, no exceptions
     if elapsed < _LOSS_HARD_COOLDOWN_SECS:
         remaining = int((_LOSS_HARD_COOLDOWN_SECS - elapsed) / 60)
         return True, f"LossCooldown:{remaining}min_remaining(pnl={loss_info['pnl']:.2f})"
 
-    # Stage 2: Regime confidence threshold
+    # Stage 2: Regime confidence threshold (50% so 55% TRENDING / 51% RANGING can re-enter)
     if regime_conf < _LOSS_REGIME_MIN_CONF:
         return True, (
             f"ReentryBlocked:regime_conf_low({regime_conf:.0%} < {_LOSS_REGIME_MIN_CONF:.0%})"
