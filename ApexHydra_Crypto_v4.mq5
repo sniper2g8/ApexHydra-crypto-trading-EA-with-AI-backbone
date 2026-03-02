@@ -163,6 +163,8 @@ string       g_log_lines[];
 int          g_log_cnt       = 0;
 
 datetime     g_modal_cooldown_until = 0;  // Skip Modal calls until this time (after 5xx/timeout)
+datetime     g_last_indicator_fail_log[20];  // throttle "indicators failed" per symbol
+datetime     g_last_no_trade_log[20];       // throttle "no trade" diagnostic per symbol
 
 const string DASH = "AH4_";
 
@@ -407,11 +409,29 @@ void ScanAll() {
 
       // ── Active scan ───────────────────────────────────────────────
       seeking++;
-      if(!CollectIndicators(g_syms[i])) continue;
+      if(!CollectIndicators(g_syms[i])) {
+         if(i < 20 && (TimeCurrent() - g_last_indicator_fail_log[i]) >= 300) {
+            int bars_tf = (int)iBars(g_syms[i].symbol, Inp_TF);
+            int bars_htf = (int)iBars(g_syms[i].symbol, Inp_HTF);
+            Log(g_syms[i].symbol + " indicators failed (need " + IntegerToString(Inp_AI_Lookback+10) +
+                " bars: " + IntegerToString(bars_tf) + " " + EnumToString(Inp_TF) +
+                ", " + IntegerToString(bars_htf) + " " + EnumToString(Inp_HTF) + ")");
+            g_last_indicator_fail_log[i] = TimeCurrent();
+         }
+         continue;
+      }
       CallModalAI(g_syms[i]);
 
-      if(g_syms[i].signal != 0)
+      if(g_syms[i].signal != 0) {
          ExecuteTrade(g_syms[i]);
+      } else if(i < 20 && g_syms[i].ai_ok && (TimeCurrent() - g_last_no_trade_log[i]) >= 300) {
+         // Diagnostic: Modal returned 200 but signal=0 (no trade) — log why so user can fix
+         string reason = g_syms[i].ai_reasoning;
+         if(StringLen(reason) > 70) reason = StringSubstr(reason, 0, 67) + "...";
+         Log(g_syms[i].symbol + " no trade | conf=" + DoubleToString(g_syms[i].confidence*100, 1) + "% min=" +
+             DoubleToString(g_cfg.min_confidence*100, 1) + "% | " + reason);
+         g_last_no_trade_log[i] = TimeCurrent();
+      }
       g_syms[i].last_scan = TimeCurrent();
    }
 
@@ -700,7 +720,11 @@ void CallModalAI(SSymbolData &s) {
    int code = WebRequest("POST", predict_url, headers, Inp_AI_Timeout, req, res, res_headers);
 
    if(code != 200) {
-      Log(sym + " Modal AI error: HTTP " + IntegerToString(code));
+      string err = sym + " Modal AI error: HTTP " + IntegerToString(code);
+      if(code == 401) err += " (unauthorized — check Modal MODAL_API_KEY or disable auth)";
+      if(code == 404) err += " (wrong URL — use exact deploy URL + /predict)";
+      if(code == -1 || code == 0) err += " (add URL to MT5 Tools→Options→Expert Advisors→Allow WebRequest)";
+      Log(err);
       s.ai_ok = false;
       s.signal = 0;
       s.confidence = 0;
