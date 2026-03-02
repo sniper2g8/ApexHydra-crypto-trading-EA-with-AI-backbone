@@ -129,6 +129,7 @@ struct SConfig {
    double   max_dd_pct;
    int      max_positions;
    double   min_confidence;
+   double   allocated_capital;  // 0 = use full balance for sizing (sent to Modal)
    bool     halted;
    bool     paused;
    datetime last_pull;
@@ -161,6 +162,8 @@ int          g_scan_count    = 0;    // incremented each OnTimer — gates heart
 string       g_log_lines[];
 int          g_log_cnt       = 0;
 
+datetime     g_modal_cooldown_until = 0;  // Skip Modal calls until this time (after 5xx/timeout)
+
 const string DASH = "AH4_";
 
 //═══════════════════════════════════════════════════════════════════
@@ -179,9 +182,10 @@ int OnInit() {
    g_cfg.risk_pct       = Inp_Risk_Pct;
    g_cfg.max_dd_pct     = Inp_MaxDD_Pct;
    g_cfg.max_positions  = Inp_Max_Pos;
-   g_cfg.min_confidence = Inp_Min_Conf;
-   g_cfg.halted         = false;
-   g_cfg.paused         = false;
+   g_cfg.min_confidence    = Inp_Min_Conf;
+   g_cfg.allocated_capital  = 0;
+   g_cfg.halted             = false;
+   g_cfg.paused             = false;
 
    if(!ParseSymbols()) { Alert("No valid symbols!"); return INIT_FAILED; }
    RestorePositions();   // re-link any already-open positions so reinit doesn't duplicate them
@@ -609,6 +613,9 @@ bool IsNewsBlocked(const string sym, int &mins_away_out) {
 void CallModalAI(SSymbolData &s) {
    string sym = s.symbol;
 
+   // Skip Modal calls briefly after 5xx/timeout to avoid hammering
+   if(TimeCurrent() < g_modal_cooldown_until) return;
+
    // Check news filter (compute once, passed into payload)
    int news_mins = 999;
    IsNewsBlocked(sym, news_mins);   // Sets news_mins; logging handled inside
@@ -637,12 +644,12 @@ void CallModalAI(SSymbolData &s) {
    }
    h_sigs+="]"; h_pnls+="]"; h_regs+="]";
 
-   // JSON payload
+   // JSON payload (allocated_capital so Modal can size lots against it; 0 = full balance)
    string body = StringFormat(
       "{"
       "\"symbol\":\"%s\",\"timeframe\":\"%s\",\"magic\":%d,"
       "\"timestamp\":\"%s\","
-      "\"account_balance\":%.2f,\"account_equity\":%.2f,"
+      "\"account_balance\":%.2f,\"account_equity\":%.2f,\"allocated_capital\":%.2f,"
       "\"risk_pct\":%.2f,\"max_positions\":%d,\"open_positions\":%d,"
       "\"bars\":{\"open\":[%s],\"high\":[%s],\"low\":[%s],\"close\":[%s],\"volume\":[%s]},"
       "\"atr\":%.5f,\"atr_avg\":%.5f,\"adx\":%.2f,\"plus_di\":%.2f,\"minus_di\":%.2f,"
@@ -657,7 +664,7 @@ void CallModalAI(SSymbolData &s) {
       "}",
       sym, EnumToString(Inp_TF), Inp_Magic,
       TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
-      AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
+      AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY), g_cfg.allocated_capital,
       g_cfg.risk_pct, g_cfg.max_positions, CountOpenPos(),
       opens, highs, lows, closes, vols,
       s.atr, s.atr_avg, s.adx, s.plus_di, s.minus_di,
@@ -695,9 +702,12 @@ void CallModalAI(SSymbolData &s) {
    if(code != 200) {
       Log(sym + " Modal AI error: HTTP " + IntegerToString(code));
       s.ai_ok = false;
-      // Always reset signal on AI failure — stale signal from previous call must not persist
       s.signal = 0;
       s.confidence = 0;
+      // Cooldown: skip Modal for 60s after 5xx or timeout to avoid thundering herd
+      if(code >= 500 || code == 0) g_modal_cooldown_until = TimeCurrent() + 60;
+      if(Inp_DB_Enable && (code >= 500 || code == 0))
+         DBPost("events", BuildEventJSON("WARN", "Modal HTTP " + IntegerToString(code) + " — 60s cooldown"));
       return;
    }
 
@@ -868,19 +878,21 @@ void ManagePositions() {
                double min_dist = (double)MathMax(stops, freeze) * pt;
 
                if(buy) {
-                  // SL must be below current price by min_dist (otherwise broker rejects)
                   if((sl == 0 || target_sl > sl) && target_sl < price - min_dist) {
                      if(!g_trade.PositionModify(g_pos.Ticket(), target_sl, tp)) {
-                        Log(sym + " SL lock failed: " + IntegerToString(g_trade.ResultRetcode()) +
-                            " [" + g_trade.ResultRetcodeDescription() + "]");
+                        string err = sym + " half-TP SL lock failed: " + IntegerToString(g_trade.ResultRetcode()) +
+                            " [" + g_trade.ResultRetcodeDescription() + "]";
+                        Log(err);
+                        if(Inp_DB_Enable) DBPost("events", BuildEventJSON("WARN", err));
                      }
                   }
                } else {
-                  // For SELL, SL must be above current price by min_dist
                   if((sl == 0 || target_sl < sl) && target_sl > price + min_dist) {
                      if(!g_trade.PositionModify(g_pos.Ticket(), target_sl, tp)) {
-                        Log(sym + " SL lock failed: " + IntegerToString(g_trade.ResultRetcode()) +
-                            " [" + g_trade.ResultRetcodeDescription() + "]");
+                        string err = sym + " half-TP SL lock failed: " + IntegerToString(g_trade.ResultRetcode()) +
+                            " [" + g_trade.ResultRetcodeDescription() + "]";
+                        Log(err);
+                        if(Inp_DB_Enable) DBPost("events", BuildEventJSON("WARN", err));
                      }
                   }
                }
@@ -1017,23 +1029,39 @@ void PullStats() {
    }
 }
 
+// One retry for GET config (flaky network)
+int WebRequestGetWithRetry(string url, string headers, int timeout_ms, char &req[], char &res[], string &res_hdr) {
+   int code = WebRequest("GET", url, headers, timeout_ms, req, res, res_hdr);
+   if(code != 200 && code != 0) {
+      Sleep(1500);
+      code = WebRequest("GET", url, headers, timeout_ms, req, res, res_hdr);
+   }
+   return code;
+}
+
 void PullConfig() {
    if(!Inp_DB_Enable) return;
    string url     = Inp_DB_URL + "/rest/v1/ea_config?magic=eq." + IntegerToString(Inp_Magic) + "&limit=1";
    string headers = "apikey: " + Inp_DB_Key + "\r\nAuthorization: Bearer " + Inp_DB_Key + "\r\n";
    char   req[], res[];
    string res_hdr;
-   int code = WebRequest("GET", url, headers, 5000, req, res, res_hdr);
+   int code = WebRequestGetWithRetry(url, headers, 5000, req, res, res_hdr);
    if(code != 200) { g_cfg.last_pull = TimeCurrent(); return; }
 
    string json = CharArrayToString(res);
-   // Parse config values from JSON array response
    if(StringFind(json,"risk_pct") >= 0) {
       double v = JSONGetDbl(json,"risk_pct");     if(v > 0) g_cfg.risk_pct = v;
       v = JSONGetDbl(json,"max_dd_pct");          if(v > 0) g_cfg.max_dd_pct = v;
       int iv = (int)JSONGetInt(json,"max_positions"); if(iv > 0) g_cfg.max_positions = iv;
       v = JSONGetDbl(json,"min_confidence");      if(v > 0) g_cfg.min_confidence = v;
-      // Remote halt/pause from Streamlit dashboard
+      // Capital: prefer allocated_capital; else trading_capital * capital_pct/100 for dashboard compatibility
+      double alloc = JSONGetDbl(json, "allocated_capital");
+      if(alloc <= 0) {
+         double tc = JSONGetDbl(json, "trading_capital");
+         double cp = JSONGetDbl(json, "capital_pct");
+         if(tc > 0 && cp > 0) alloc = tc * (cp / 100.0);
+      }
+      g_cfg.allocated_capital = (alloc > 0) ? alloc : 0;
       string halt_str = JSONGetStr(json,"halted");
       if(halt_str == "true")  g_cfg.halted = true;
       if(halt_str == "false" && g_dd_pct < g_cfg.max_dd_pct) g_cfg.halted = false;

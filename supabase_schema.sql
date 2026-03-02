@@ -7,21 +7,27 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ── TRADES ────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS trades (
-    id           UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    symbol       TEXT NOT NULL,
-    action       TEXT NOT NULL,        -- OPEN | CLOSE
-    regime       TEXT,
-    signal       INTEGER,              -- -2 to +2
-    confidence   DECIMAL(6,4),
-    ai_score     DECIMAL(8,4),
-    lots         DECIMAL(10,4),
-    price        DECIMAL(18,5),
-    sl           DECIMAL(18,5),
-    tp           DECIMAL(18,5),
-    pnl          DECIMAL(14,2),
-    won          BOOLEAN,
-    magic        INTEGER,
-    timestamp    TIMESTAMPTZ DEFAULT NOW()
+    id             UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    symbol         TEXT NOT NULL,
+    action         TEXT NOT NULL,        -- OPEN | CLOSE
+    regime         TEXT,
+    regime_broad   TEXT,                 -- TRENDING | RANGING | VOLATILE
+    regime_id      INTEGER,
+    strategy_used  TEXT,                 -- trend_following | mean_reversion | breakout
+    signal         INTEGER,              -- -2 to +2
+    confidence     DECIMAL(6,4),
+    ai_score       DECIMAL(8,4),
+    ppo_signal     TEXT,                 -- BUY | SELL | NONE
+    ppo_confidence DECIMAL(6,4),
+    lots           DECIMAL(10,4),
+    price          DECIMAL(18,5),
+    sl             DECIMAL(18,5),
+    tp             DECIMAL(18,5),
+    pnl            DECIMAL(14,2),
+    won            BOOLEAN,
+    magic          INTEGER,
+    closed_at      TIMESTAMPTZ,
+    timestamp      TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_trades_sym  ON trades(symbol);
 CREATE INDEX idx_trades_ts   ON trades(timestamp DESC);
@@ -29,15 +35,18 @@ CREATE INDEX idx_trades_act  ON trades(action);
 
 -- ── REGIME CHANGES ────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS regime_changes (
-    id           UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    symbol       TEXT NOT NULL,
-    regime       TEXT NOT NULL,
-    confidence   DECIMAL(6,4),
-    adx          DECIMAL(8,2),
-    atr          DECIMAL(18,5),
-    rsi          DECIMAL(8,2),
-    ai_score     DECIMAL(8,4),
-    timestamp    TIMESTAMPTZ DEFAULT NOW()
+    id             UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    symbol         TEXT NOT NULL,
+    regime         TEXT NOT NULL,
+    regime_broad   TEXT,
+    regime_id      INTEGER,
+    strategy_used  TEXT,
+    confidence     DECIMAL(6,4),
+    adx            DECIMAL(8,2),
+    atr            DECIMAL(18,5),
+    rsi            DECIMAL(8,2),
+    ai_score       DECIMAL(8,4),
+    timestamp      TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_regime_sym ON regime_changes(symbol);
 CREATE INDEX idx_regime_ts  ON regime_changes(timestamp DESC);
@@ -72,21 +81,28 @@ CREATE INDEX idx_events_ts ON events(timestamp DESC);
 --  EA CONFIG TABLE — Streamlit writes here → EA reads every 30s
 -- ══════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS ea_config (
-    id              UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    magic           INTEGER DEFAULT 20250228 UNIQUE,
-    -- Capital allocation (EA risks only this amount, not full balance)
-    allocated_capital DECIMAL(16,2) DEFAULT 0.0,  -- 0 = use full account balance
-    -- Risk parameters (Streamlit can update these)
-    risk_pct        DECIMAL(5,2) DEFAULT 1.0,
-    max_dd_pct      DECIMAL(5,2) DEFAULT 20.0,
-    max_positions   INTEGER DEFAULT 3,
-    min_confidence  DECIMAL(5,4) DEFAULT 0.55,
-    -- Control flags (Streamlit remote control)
-    halted          BOOLEAN DEFAULT FALSE,
-    paused          BOOLEAN DEFAULT FALSE,
-    -- Metadata
-    updated_at      TIMESTAMPTZ DEFAULT NOW(),
-    updated_by      TEXT DEFAULT 'system'     -- 'streamlit' | 'ea' | 'system'
+    id                UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    magic             INTEGER DEFAULT 20250228 UNIQUE,
+    allocated_capital  DECIMAL(16,2) DEFAULT 0.0,  -- 0 = use full balance (Telegram + EA→Modal)
+    trading_capital   DECIMAL(16,2) DEFAULT 0.0,  -- Dashboard: base amount
+    capital_pct       DECIMAL(5,2) DEFAULT 100.0,  -- Dashboard: usable %
+    risk_pct          DECIMAL(5,2) DEFAULT 1.0,
+    max_dd_pct        DECIMAL(5,2) DEFAULT 20.0,
+    max_positions     INTEGER DEFAULT 3,
+    min_confidence    DECIMAL(5,4) DEFAULT 0.55,
+    halted            BOOLEAN DEFAULT FALSE,
+    paused            BOOLEAN DEFAULT FALSE,
+    -- Live patch (EA PATCHes every tick when equity changes)
+    live_balance      DECIMAL(16,2),
+    live_equity       DECIMAL(16,2),
+    live_dd_pct       DECIMAL(8,4),
+    live_pnl          DECIMAL(16,2),
+    live_trades       INTEGER,
+    live_wins         INTEGER,
+    live_losses       INTEGER,
+    live_ts           TEXT,
+    updated_at        TIMESTAMPTZ DEFAULT NOW(),
+    updated_by        TEXT DEFAULT 'system'
 );
 
 -- Insert default config row

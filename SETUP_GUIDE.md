@@ -55,14 +55,9 @@ Copy the token: 123456789:ABCdef...
 Message @userinfobot on Telegram
 It replies with your numeric ID e.g. 987654321
 
-4. Create a .env file in the same folder as the bot script:
-envTELEGRAM_BOT_TOKEN=123456789:ABCdef...
-TELEGRAM_ALLOWED_IDS=987654321
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your_service_role_key
-DD_ALERT_PCT=10.0
-DD_CRITICAL_PCT=18.0
-MONITOR_INTERVAL_S=60
+4. Create a `.env` file in the same folder as the bot script (copy from `.env.example` and fill in):
+   - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_IDS`, `SUPABASE_URL`, `SUPABASE_KEY` (required)
+   - Optional: `DD_ALERT_PCT`, `DD_CRITICAL_PCT`, `MONITOR_INTERVAL_S`
 5. Test it runs
 bashpython apex_hydra_telegram_bot.py
 Then message your bot /start on Telegram.
@@ -139,6 +134,7 @@ Recommendation: For your setup, Option A (VPS systemd service) is simplest — t
 
 1. Create free project at https://supabase.com
 2. **SQL Editor** → New Query → Paste `supabase_schema.sql` → **Run**
+   - If you already have an older schema, run `supabase_migrations/001_add_live_and_v5_columns.sql` instead (adds missing columns).
 3. Go to **Project Settings → API**
    - Copy **Project URL**: `https://xxxxx.supabase.co`
    - Copy **anon / public key** (for MT5 EA)
@@ -188,10 +184,10 @@ modal secret create apexhydra-secrets \
 ```bash
 pip install -r requirements.txt
 
-# Add your Supabase credentials
+# Add your Supabase credentials (copy from .streamlit/secrets.toml.example)
 mkdir -p .streamlit
-nano .streamlit/secrets.toml
-# Paste SUPABASE_URL and SUPABASE_KEY
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+# Edit .streamlit/secrets.toml: set SUPABASE_URL and SUPABASE_KEY
 
 streamlit run apex_hydra_dashboard.py
 ```
