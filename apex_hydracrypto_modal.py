@@ -106,7 +106,7 @@ _seeded_symbols: set       = set()
 # Records the last loss timestamp + regime per symbol so _predict_inner
 # can apply a cooldown and regime validation before re-entering.
 _LAST_LOSS: dict = {}   # symbol → {"ts": datetime, "regime": str, "pnl": float}
-_LOSS_HARD_COOLDOWN_SECS  = 900    # 15 min absolute block after a loss
+_LOSS_HARD_COOLDOWN_SECS  = 300    # 5 min absolute block after a loss (relaxed for more trades / GB training)
 _LOSS_REGIME_MIN_CONF     = 0.50   # minimum regime confidence to re-enter (was 0.70 — crypto often 50–60%, caused permanent block)
 _LOSS_MAX_COOLDOWN_SECS   = 1800   # after 60 min, clear loss and allow re-entry regardless of regime
 _LOSS_REENTRY_CONF_PENALTY= 0.08   # confidence penalty applied even after passing checks
@@ -911,6 +911,30 @@ STRATEGY_FN = {
     "breakout":        signal_breakout,
 }
 
+# When primary strategy returns NONE, try others and use best signal (more trades for GB training)
+_FALLBACK_MIN_CONF = 0.50
+
+
+def _rb_with_fallback(p: AIRequest, primary_strategy: str) -> tuple[str, float, str, str]:
+    """
+    Run primary strategy; if it returns NONE, try other strategies and return best signal.
+    Returns (direction, confidence, reason, strategy_used).
+    """
+    direction, conf, reason = STRATEGY_FN[primary_strategy](p)
+    strategy_used = primary_strategy
+    if direction != "NONE" and conf >= _FALLBACK_MIN_CONF:
+        return direction, conf, reason, strategy_used
+    best_dir, best_conf, best_reason, best_strat = "NONE", 0.0, "no_signal", primary_strategy
+    for name, fn in STRATEGY_FN.items():
+        if name == primary_strategy:
+            continue
+        d, c, r = fn(p)
+        if d != "NONE" and c >= _FALLBACK_MIN_CONF and c > best_conf:
+            best_dir, best_conf, best_reason, best_strat = d, c, r, name
+    if best_dir != "NONE":
+        return best_dir, best_conf, f"fallback:{best_strat}|{best_reason}", best_strat
+    return direction, conf, reason, strategy_used
+
 
 # ──────────────────────────────────────────────────────────────────────
 #  SECTION 5 — PPO MODEL MANAGEMENT
@@ -1238,27 +1262,26 @@ async def _predict_inner(p: AIRequest):
                     _record_loss(sym, regime_str, last_pnl)
         print(f"[REENTRY] DB loss check failed ({_le}), used recent_outcomes fallback")
 
-    # Rule-based strategy signal
-    rb_direction, rb_conf, rb_reason = STRATEGY_FN[strategy](p)
+    # Rule-based strategy signal (with fallback to other strategies if primary returns NONE)
+    rb_direction, rb_conf, rb_reason, strategy_used = _rb_with_fallback(p, strategy)
 
-    # GB (Gradient Boosting) signal — primary ML layer, trained on actual trade outcomes
+    # GB (Gradient Boosting) signal — use strategy_used so fallback signals use correct model
     gb_dir, gb_conf = "NONE", 0.0
-    if is_gb_trained(strategy):
+    if is_gb_trained(strategy_used):
         try:
-            gb_dir, gb_conf = gb_predict(strategy, features)
+            gb_dir, gb_conf = gb_predict(strategy_used, features)
         except Exception as e:
-            print(f"[GB] predict failed for {strategy}: {e}")
+            print(f"[GB] predict failed for {strategy_used}: {e}")
 
-    # Legacy PPO signal — kept for model health monitoring but NOT used in fusion
-    # (PPO trains on zero-reward env and provides no real signal value)
+    # Legacy PPO signal — use strategy_used; kept for model health monitoring
     ppo_dir, ppo_conf, ppo_trained = "NONE", 0.0, False
-    if is_model_trained(strategy):
+    if is_model_trained(strategy_used):
         try:
-            model   = load_strategy_model(strategy)
+            model   = load_strategy_model(strategy_used)
             ppo_dir, ppo_conf = ppo_predict(model, features)
             ppo_trained = True
         except Exception as e:
-            print(f"[PPO] predict failed for {strategy}: {e}")
+            print(f"[PPO] predict failed for {strategy_used}: {e}")
 
     # Signal fusion: rule-based (70%) + GB (30% if trained + confident)
     # GB replaces PPO as the ML signal source.
@@ -1274,7 +1297,7 @@ async def _predict_inner(p: AIRequest):
             final_dir  = gb_dir
             final_conf = gb_conf * 0.60   # dampened — rule-based didn't confirm
             ml_source  = f"gb_solo"
-    elif ppo_trained and ppo_dir != "NONE" and ppo_conf >= 0.55 and not is_gb_trained(strategy):
+    elif ppo_trained and ppo_dir != "NONE" and ppo_conf >= 0.55 and not is_gb_trained(strategy_used):
         # PPO fallback only when GB not yet trained
         if ppo_dir == rb_direction:
             final_conf = min(0.98, rb_conf * 0.70 + ppo_conf * 0.30)
@@ -1284,18 +1307,18 @@ async def _predict_inner(p: AIRequest):
             final_conf = ppo_conf * 0.60
             ml_source  = "ppo_solo_fallback"
 
-    # Regime-confidence gate (relaxed to 48% for more trades / GB training)
-    if final_dir != "NONE" and regime_conf < 0.48:
+    # Regime-confidence gate (relaxed to 42% for more trades / GB training)
+    if final_dir != "NONE" and regime_conf < 0.42:
         final_dir  = "NONE"
         final_conf = 0.0
-        rb_reason += f" | RegimeGate:conf({regime_conf:.0%})<48%"
+        rb_reason += f" | RegimeGate:conf({regime_conf:.0%})<42%"
 
     # Mean-reversion trending block:
     # During the warm-up period or while regime has been persistently TRENDING,
     # suppress MR signals to avoid fading strong moves.
     # Requires 9 of the last 12 regime readings to be TRENDING (majority, not unanimous)
     # — gives resilience to brief ranging candles within strong trends.
-    if strategy == "mean_reversion" and final_dir != "NONE":
+    if strategy_used == "mean_reversion" and final_dir != "NONE":
         warmup_ok = (datetime.now(timezone.utc) - _CONTAINER_START).total_seconds() > _MR_WARMUP_SECS
         hist      = list(_REGIME_HISTORY.get(sym, []))
         if warmup_ok and len(hist) >= 12:
@@ -1339,13 +1362,13 @@ async def _predict_inner(p: AIRequest):
             final_conf = max(0.0, final_conf - penalty)
             rb_reason += f" | SpreadPenalty:{penalty:.2f}"
 
-    # Position sizing
-    lots, sl, tp, sl_m, tp_m, rr, tp_mat = compute_position(p, final_dir, final_conf, strategy)
+    # Position sizing (use strategy_used so SL/TP match the strategy that produced the signal)
+    lots, sl, tp, sl_m, tp_m, rr, tp_mat = compute_position(p, final_dir, final_conf, strategy_used)
     signal_int = direction_to_signal(final_dir, final_conf)
 
     reasoning = (
         f"Regime={regime_str}({regime_conf:.0%}) | "
-        f"Strategy={strategy} | "
+        f"Strategy={strategy_used} | "
         f"RB={rb_direction}({rb_conf:.0%}) | "
         f"GB={gb_dir}({gb_conf:.0%},src={ml_source}) | "
         f"PPO={ppo_dir}({ppo_conf:.0%},monitoring_only) | "
@@ -1361,7 +1384,7 @@ async def _predict_inner(p: AIRequest):
         regime_id      = regime_id,
         regime_name    = regime_name,
         regime_conf    = round(regime_conf, 4),
-        strategy_used  = strategy,
+        strategy_used  = strategy_used,
         signal         = signal_int,
         signal_name    = SIGNAL_NAMES.get(signal_int, "Hold"),
         confidence     = round(final_conf, 4),
