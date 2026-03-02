@@ -776,16 +776,16 @@ def classify_regime_granular(p: AIRequest, regime: str, features: np.ndarray) ->
 #  SECTION 4 — STRATEGY ENGINES  (crypto-tuned)
 # ──────────────────────────────────────────────────────────────────────
 
-# Minimum ADX for trend-following (avoids weak/choppy trends → fewer false signals)
-_TF_ADX_MIN = 20.0
-# Confluence threshold: higher = fewer but more accurate signals (was 0.60)
-_TF_CONFLUENCE_MIN = 0.65
+# Minimum ADX for trend-following (relaxed to 18 for more trades / GB training)
+_TF_ADX_MIN = 18.0
+# Confluence threshold (relaxed to 0.60 for more trades / GB training)
+_TF_CONFLUENCE_MIN = 0.60
 
 
 def signal_trend_following(p: AIRequest) -> tuple[str, float, str]:
     """
     EMA stack + MACD histogram + ADX + volume confirmation.
-    Accuracy: require ADX >= 20 and confluence >= 65% so only clear trends trigger.
+    ADX >= 18, confluence >= 60% (relaxed for more trades / GB training).
     """
     c = list(reversed(p.bars.close[:60]))
     v = list(reversed(p.bars.volume[:60]))
@@ -864,9 +864,9 @@ def signal_mean_reversion(p: AIRequest) -> tuple[str, float, str]:
 
     t = sb + se
     if t == 0: return "NONE", 0.0, "no_signal"
-    # Stricter confluence (0.65) for more accurate mean-reversion entries
-    if sb > se and sb / t >= 0.65: return "BUY",  round(min(sb / t, 0.99), 4), "MR:" + ",".join(votes)
-    if se > sb and se / t >= 0.65: return "SELL", round(min(se / t, 0.99), 4), "MR:" + ",".join(votes)
+    # Confluence 0.60 (relaxed for more trades / GB training)
+    if sb > se and sb / t >= 0.60: return "BUY",  round(min(sb / t, 0.99), 4), "MR:" + ",".join(votes)
+    if se > sb and se / t >= 0.60: return "SELL", round(min(se / t, 0.99), 4), "MR:" + ",".join(votes)
     return "NONE", 0.0, "low_confluence"
 
 
@@ -899,9 +899,9 @@ def signal_breakout(p: AIRequest) -> tuple[str, float, str]:
 
     t = sb + se
     if t == 0: return "NONE", 0.0, "no_breakout"
-    # Stricter confluence (0.68) to reduce false breakouts
-    if sb > se and sb / t >= 0.68: return "BUY",  round(min(sb / t, 0.99), 4), "BO:" + ",".join(votes)
-    if se > sb and se / t >= 0.68: return "SELL", round(min(se / t, 0.99), 4), "BO:" + ",".join(votes)
+    # Confluence 0.65 (relaxed for more trades / GB training)
+    if sb > se and sb / t >= 0.65: return "BUY",  round(min(sb / t, 0.99), 4), "BO:" + ",".join(votes)
+    if se > sb and se / t >= 0.65: return "SELL", round(min(se / t, 0.99), 4), "BO:" + ",".join(votes)
     return "NONE", 0.0, "low_confluence"
 
 
@@ -1284,11 +1284,11 @@ async def _predict_inner(p: AIRequest):
             final_conf = ppo_conf * 0.60
             ml_source  = "ppo_solo_fallback"
 
-    # Regime-confidence gate: don't trade when regime is ambiguous (improves accuracy)
-    if final_dir != "NONE" and regime_conf < 0.55:
+    # Regime-confidence gate (relaxed to 48% for more trades / GB training)
+    if final_dir != "NONE" and regime_conf < 0.48:
         final_dir  = "NONE"
         final_conf = 0.0
-        rb_reason += f" | RegimeGate:conf({regime_conf:.0%})<55%"
+        rb_reason += f" | RegimeGate:conf({regime_conf:.0%})<48%"
 
     # Mean-reversion trending block:
     # During the warm-up period or while regime has been persistently TRENDING,
