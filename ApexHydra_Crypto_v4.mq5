@@ -451,46 +451,58 @@ bool CollectIndicators(SSymbolData &s) {
 
    // ATR
    h = iATR(sym, Inp_TF, Inp_ATR_Period);
-   CopyBuffer(h, 0, 1, 1, buf); s.atr = buf[0];
+   if(CopyBuffer(h, 0, 1, 1, buf) < 1) { IndicatorRelease(h); return false; }
+   s.atr = buf[0];
    double atrbuf[];
    ArraySetAsSeries(atrbuf, true);
-   CopyBuffer(h, 0, 1, Inp_ATR_Avg_Win, atrbuf);
+   if(CopyBuffer(h, 0, 1, Inp_ATR_Avg_Win, atrbuf) < Inp_ATR_Avg_Win) { IndicatorRelease(h); return false; }
    double sum=0; for(int b=0;b<Inp_ATR_Avg_Win;b++) sum+=atrbuf[b];
    s.atr_avg = sum / Inp_ATR_Avg_Win;
    IndicatorRelease(h);
 
    // ADX
    h = iADX(sym, Inp_TF, Inp_ADX_Period);
-   CopyBuffer(h, 0, 1, 1, buf); s.adx      = buf[0];
-   CopyBuffer(h, 1, 1, 1, buf); s.plus_di  = buf[0];
-   CopyBuffer(h, 2, 1, 1, buf); s.minus_di = buf[0];
+   if(CopyBuffer(h, 0, 1, 1, buf) < 1) { IndicatorRelease(h); return false; }
+   s.adx      = buf[0];
+   if(CopyBuffer(h, 1, 1, 1, buf) < 1) { IndicatorRelease(h); return false; }
+   s.plus_di  = buf[0];
+   if(CopyBuffer(h, 2, 1, 1, buf) < 1) { IndicatorRelease(h); return false; }
+   s.minus_di = buf[0];
    IndicatorRelease(h);
 
    // RSI
    h = iRSI(sym, Inp_TF, Inp_RSI_Period, PRICE_CLOSE);
-   CopyBuffer(h, 0, 1, 1, buf); s.rsi = buf[0];
+   if(CopyBuffer(h, 0, 1, 1, buf) < 1) { IndicatorRelease(h); return false; }
+   s.rsi = buf[0];
    IndicatorRelease(h);
 
    // MACD
    h = iMACD(sym, Inp_TF, Inp_MACD_Fast, Inp_MACD_Slow, Inp_MACD_Signal, PRICE_CLOSE);
-   CopyBuffer(h, 0, 1, 1, buf); s.macd     = buf[0];
-   CopyBuffer(h, 1, 1, 1, buf); s.macd_sig = buf[0];
+   if(CopyBuffer(h, 0, 1, 1, buf) < 1) { IndicatorRelease(h); return false; }
+   s.macd     = buf[0];
+   if(CopyBuffer(h, 1, 1, 1, buf) < 1) { IndicatorRelease(h); return false; }
+   s.macd_sig = buf[0];
    s.macd_hist = s.macd - s.macd_sig;
    IndicatorRelease(h);
 
    // EMAs
    h = iMA(sym,Inp_TF,Inp_EMA_Fast,0,MODE_EMA,PRICE_CLOSE);
-   CopyBuffer(h,0,1,1,buf); s.ema20=buf[0]; IndicatorRelease(h);
+   if(CopyBuffer(h,0,1,1,buf) < 1) { IndicatorRelease(h); return false; }
+   s.ema20=buf[0]; IndicatorRelease(h);
    h = iMA(sym,Inp_TF,Inp_EMA_Mid,0,MODE_EMA,PRICE_CLOSE);
-   CopyBuffer(h,0,1,1,buf); s.ema50=buf[0]; IndicatorRelease(h);
+   if(CopyBuffer(h,0,1,1,buf) < 1) { IndicatorRelease(h); return false; }
+   s.ema50=buf[0]; IndicatorRelease(h);
    h = iMA(sym,Inp_TF,Inp_EMA_Slow,0,MODE_EMA,PRICE_CLOSE);
-   CopyBuffer(h,0,1,1,buf); s.ema200=buf[0]; IndicatorRelease(h);
+   if(CopyBuffer(h,0,1,1,buf) < 1) { IndicatorRelease(h); return false; }
+   s.ema200=buf[0]; IndicatorRelease(h);
 
    // HTF EMAs
    h = iMA(sym,Inp_HTF,Inp_EMA_Mid,0,MODE_EMA,PRICE_CLOSE);
-   CopyBuffer(h,0,1,1,buf); s.htf_ema50=buf[0]; IndicatorRelease(h);
+   if(CopyBuffer(h,0,1,1,buf) < 1) { IndicatorRelease(h); return false; }
+   s.htf_ema50=buf[0]; IndicatorRelease(h);
    h = iMA(sym,Inp_HTF,Inp_EMA_Slow,0,MODE_EMA,PRICE_CLOSE);
-   CopyBuffer(h,0,1,1,buf); s.htf_ema200=buf[0]; IndicatorRelease(h);
+   if(CopyBuffer(h,0,1,1,buf) < 1) { IndicatorRelease(h); return false; }
+   s.htf_ema200=buf[0]; IndicatorRelease(h);
 
    return true;
 }
@@ -503,17 +515,34 @@ bool CollectIndicators(SSymbolData &s) {
 //  currency pair. Returns 999 if no event found within look-ahead window.
 //═══════════════════════════════════════════════════════════════════
 
-//  Map a symbol like "BTCUSD" → {"USD"} or "EURUSD" → {"EUR","USD"}
+//  Map a symbol like "BTCUSD" → {"USD"} or "AVAXUSDm" → {"USD"} (base 3 or 4 chars)
 void GetSymbolCurrencies(const string sym, string &currencies[]) {
-   // Crypto: only quote currency matters (USD)
-   string base = StringSubstr(sym, 0, 3);
-   string quote = StringSubstr(sym, 3, 3);
+   string s = sym;
+   int len = StringLen(s);
+   if(len < 6) { ArrayResize(currencies, 0); return; }
+   // Strip trailing broker suffix (e.g. "m" or "M")
+   if(len > 6) {
+      string last = StringSubstr(s, len - 1, 1);
+      if(last == "m" || last == "M") { s = StringSubstr(s, 0, len - 1); len = StringLen(s); }
+   }
+   // 6-char: XXXYYY (base 3, quote 3). 7-char: XXXXYYY (base 4, quote 3 e.g. AVAXUSD)
+   string base, quote;
+   if(len == 7) {
+      base  = StringSubstr(s, 0, 4);
+      quote = StringSubstr(s, 4, 3);
+   } else {
+      base  = StringSubstr(s, 0, 3);
+      quote = StringSubstr(s, 3, 3);
+   }
    // Common crypto bases — treat as non-fiat, only flag quote events
-   string cryptoBases[] = {"BTC","ETH","SOL","BNB","XRP","ADA","DOT","AVA","LTC","DOGE"};
+   string cryptoBases3[] = {"BTC","ETH","SOL","BNB","XRP","ADA","DOT","LTC","DOGE"};
+   string cryptoBases4[] = {"AVAX","MATIC","LINK","UNI","ATOM","FIL","NEAR","SAND","MANA"};
    bool isCrypto = false;
-   for(int i = 0; i < ArraySize(cryptoBases); i++)
-      if(base == cryptoBases[i]) { isCrypto = true; break; }
-
+   for(int i = 0; i < ArraySize(cryptoBases3); i++)
+      if(base == cryptoBases3[i]) { isCrypto = true; break; }
+   if(!isCrypto)
+      for(int i = 0; i < ArraySize(cryptoBases4); i++)
+         if(base == cryptoBases4[i]) { isCrypto = true; break; }
    if(isCrypto) {
       ArrayResize(currencies, 1);
       currencies[0] = quote;
