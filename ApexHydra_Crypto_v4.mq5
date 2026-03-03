@@ -152,6 +152,8 @@ SConfig      g_cfg;
 double       g_balance_start = 0;
 double       g_peak_equity   = 0;
 double       g_dd_pct        = 0;
+double       g_last_balance  = 0;           // detect deposit/withdrawal
+ulong        g_last_balance_deal_ticket = 0;  // avoid re-processing same balance deal
 
 int          g_total_trades  = 0;
 int          g_total_wins    = 0;
@@ -182,6 +184,7 @@ int OnInit() {
    // Filling type is set per-symbol in ExecuteTrade — see GetFilling()
    g_balance_start = AccountInfoDouble(ACCOUNT_BALANCE);
    g_peak_equity   = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_last_balance = AccountInfoDouble(ACCOUNT_BALANCE);
 
    // Default config from inputs
    g_cfg.risk_pct       = Inp_Risk_Pct;
@@ -234,7 +237,14 @@ void OnDeinit(const int reason) {
 
 void OnTick() {
    // Always track peak equity even when halted/paused
-   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   // If balance changed, check for deposit/withdrawal — reset peak so DD doesn't spike
+   if(MathAbs(bal - g_last_balance) >= 0.01) {
+      CheckBalanceDeals(eq, bal);
+      g_last_balance = bal;
+   }
    if(eq > g_peak_equity) g_peak_equity = eq;
    g_dd_pct = (g_peak_equity > 0) ? (1.0 - eq / g_peak_equity) * 100.0 : 0;
 
@@ -627,6 +637,53 @@ bool IsNewsBlocked(const string sym, int &mins_away_out) {
    if(blocked && Inp_News_Log)
       Log(sym + " NEWS BLOCK: high-impact event in " + IntegerToString(mins_away_out) + " min");
    return blocked;
+}
+
+//  Detect deposit/withdrawal via balance deals — reset peak equity so drawdown doesn't spike
+void CheckBalanceDeals(double eq, double bal) {
+   datetime from = TimeCurrent() - 120;  // last 2 min
+   if(!HistorySelect(from, TimeCurrent())) return;
+   int total = HistoryDealsTotal();
+   for(int i = total - 1; i >= 0; i--) {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) continue;
+      if(HistoryDealGetInteger(ticket, DEAL_ENTRY) != DEAL_ENTRY_INOUT) continue;
+      ENUM_DEAL_TYPE dtype = (ENUM_DEAL_TYPE)HistoryDealGetInteger(ticket, DEAL_TYPE);
+      if(dtype != DEAL_TYPE_BALANCE) continue;
+      if(ticket == g_last_balance_deal_ticket) continue;
+
+      double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+      double amount = MathAbs(profit);
+      if(amount < 0.01) continue;
+
+      g_peak_equity = eq;  // reset so withdrawal isn't treated as drawdown
+      g_last_balance_deal_ticket = ticket;
+
+      string txn = (profit >= 0) ? "DEPOSIT" : "WITHDRAWAL";
+      Log("Balance: " + txn + " $" + DoubleToString(amount, 2) + " — peak equity reset (not a loss)");
+      if(Inp_DB_Enable) ReportTransaction(txn, amount, bal, ticket);
+      break;  // process only most recent balance deal
+   }
+}
+
+void ReportTransaction(string txn_type, double amount, double balance_after, ulong ticket) {
+   string base = Inp_Modal_URL;
+   int pos = StringFind(base, "/predict");
+   if(pos > 0) base = StringSubstr(base, 0, pos);
+   string url = base + "/transaction";
+   string body = StringFormat(
+      "{\"type\":\"%s\",\"amount\":%.2f,\"balance_after\":%.2f,\"ticket\":%I64u,"
+      "\"event_time\":\"%s\"}",
+      txn_type, amount, balance_after, ticket,
+      TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS)
+   );
+   char req[], res[];
+   StringToCharArray(body, req, 0, StringLen(body));
+   string headers = "Content-Type: application/json\r\n";
+   string res_hdr;
+   int code = WebRequest("POST", url, headers, 5000, req, res, res_hdr);
+   if(code != 200 && code != 0)
+      Log("Transaction report: HTTP " + IntegerToString(code));
 }
 
 //═══════════════════════════════════════════════════════════════════
